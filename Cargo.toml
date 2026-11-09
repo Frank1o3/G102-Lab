@@ -1,0 +1,13 @@
+[package]
+name = "g102-control"
+version = "0.1.0"
+edition = "2024"
+description = "Read-only Logitech HID++ inspection foundation"
+license = "MIT"
+
+[dependencies]
+hidapi = { version = "2.6.7", default-features = false, features = ["linux-static-hidraw"] }
+
+[[bin]]
+name = "g102-control"
+path = "src/main.rs"
