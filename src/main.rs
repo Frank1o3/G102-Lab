@@ -198,6 +198,9 @@ fn command(args: &[String], app_config: &AppConfig) -> Result<(), String> {
     let mut confirm_write = false;
     let mut backup_file = None;
     let mut commit_timeout_ms = None;
+    let mut used_device_option = false;
+    let mut used_sensor_option = false;
+    let mut used_rgb_option = false;
     let mut i = 2;
     while i < args.len() {
         match args[i].as_str() {
@@ -241,6 +244,11 @@ fn command(args: &[String], app_config: &AppConfig) -> Result<(), String> {
             }
             "--device" | "--sensor" | "--period-ms" | "--brightness" | "--direction" => {
                 let option = args[i].as_str();
+                match option {
+                    "--device" => used_device_option = true,
+                    "--sensor" => used_sensor_option = true,
+                    _ => used_rgb_option = true,
+                }
                 i += 1;
                 let value = args
                     .get(i)
@@ -289,6 +297,42 @@ fn command(args: &[String], app_config: &AppConfig) -> Result<(), String> {
         i += 1;
     }
 
+    if used_sensor_option && family != "dpi" {
+        return Err("--sensor is only valid for DPI commands".into());
+    }
+    if used_rgb_option && !(family == "rgb" && action == "set") {
+        return Err(
+            "--period-ms, --brightness, and --direction are only valid for `rgb set`".into(),
+        );
+    }
+    if (remap_slot.is_some() || remap_action.is_some())
+        && !(family == "onboard" && matches!(action, "remap" | "set-button"))
+    {
+        return Err("--slot and --action are only valid for onboard remap/set-button".into());
+    }
+    if (backup_file.is_some() || commit_timeout_ms.is_some())
+        && !(family == "onboard" && matches!(action, "set-button" | "restore"))
+    {
+        return Err(
+            "--backup-file and --commit-timeout-ms are only valid for onboard write commands"
+                .into(),
+        );
+    }
+    if confirm_write && !(family == "onboard" && matches!(action, "set-button" | "restore")) {
+        return Err(
+            "--confirm-write only applies to disabled onboard writes and never enables them".into(),
+        );
+    }
+    if dry_run && !(family == "onboard" && matches!(action, "remap" | "set-button" | "restore")) {
+        return Err("--dry-run is only valid for onboard remap/set-button/restore".into());
+    }
+    if used_device_option
+        && family == "onboard"
+        && matches!(action, "decode" | "buttons" | "remap" | "diff")
+    {
+        return Err("--device is not valid for offline backup commands".into());
+    }
+
     if family == "onboard" {
         match action {
             "decode" => {
@@ -316,6 +360,9 @@ fn command(args: &[String], app_config: &AppConfig) -> Result<(), String> {
             "remap" => {
                 if positional.is_empty() {
                     return Err("onboard remap requires at least <INPUT_BACKUP>".into());
+                }
+                if positional.len() > 2 {
+                    return Err("onboard remap accepts only <INPUT_BACKUP> [OUTPUT_BACKUP]".into());
                 }
                 let input_path = &positional[0];
                 let output_path = positional.get(1).map(String::as_str);
@@ -1406,6 +1453,47 @@ mod tests {
             let error = super::command(&args, &AppConfig::default()).unwrap_err();
             assert!(error.contains("disabled pending exact G102 model/firmware validation"));
             assert!(error.contains("--confirm-write cannot override this gate"));
+        }
+    }
+
+    #[test]
+    fn irrelevant_options_and_extra_offline_operands_are_rejected_early() {
+        let config = AppConfig::default();
+        for args in [
+            vec!["rate".into(), "get".into(), "--sensor".into(), "0".into()],
+            vec![
+                "rgb".into(),
+                "info".into(),
+                "--period-ms".into(),
+                "3000".into(),
+            ],
+            vec!["dpi".into(), "get".into(), "--dry-run".into()],
+            vec![
+                "onboard".into(),
+                "diff".into(),
+                "missing-a.obk".into(),
+                "missing-b.obk".into(),
+                "--device".into(),
+                "0".into(),
+            ],
+            vec![
+                "onboard".into(),
+                "remap".into(),
+                "input.obk".into(),
+                "output.obk".into(),
+                "extra.obk".into(),
+                "--slot".into(),
+                "1".into(),
+                "--action".into(),
+                "left".into(),
+            ],
+        ] {
+            let error = super::command(&args, &config).unwrap_err();
+            assert!(
+                !error.contains("could not read"),
+                "unexpected file I/O: {error}"
+            );
+            assert!(!error.contains("HID"), "unexpected HID access: {error}");
         }
     }
 
