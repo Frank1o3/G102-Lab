@@ -1,0 +1,184 @@
+#!/usr/bin/env python3
+"""Validate a Wallust-rendered palette and explicitly apply its accent to RGB."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import subprocess
+import sys
+import tomllib
+from pathlib import Path
+from typing import Any
+
+SCHEMA = "org.g102-control.palette/v1"
+COLOR_KEYS = {"background", "foreground", "accent", "secondary"}
+STATIC_EFFECT = re.compile(r"^\s*effect index (\d+): Static color \(ID 0x0001\)", re.MULTILINE)
+CLUSTER_HEADER = re.compile(r"^\s*Cluster (\d+):", re.MULTILINE)
+HEX_COLOR = re.compile(r"^#?[0-9a-fA-F]{6}$")
+
+
+def default_config_path() -> Path | None:
+    xdg = os.environ.get("XDG_CONFIG_HOME")
+    if xdg and Path(xdg).is_absolute():
+        return Path(xdg) / "g102-control" / "config.toml"
+    home = os.environ.get("HOME")
+    return Path(home) / ".config/g102-control/config.toml" if home else None
+
+
+def expand_path(value: str) -> Path:
+    return Path(value).expanduser()
+
+
+def read_config(args: argparse.Namespace) -> tuple[dict[str, Any], Path | None]:
+    if args.no_config and args.config is not None:
+        raise ValueError("--config and --no-config cannot be used together")
+    if args.no_config:
+        return {}, None
+    path = expand_path(args.config) if args.config else default_config_path()
+    if path is None or (args.config is None and not path.exists()):
+        return {}, None
+    try:
+        with path.open("rb") as stream:
+            data = tomllib.load(stream)
+    except (OSError, tomllib.TOMLDecodeError) as error:
+        raise ValueError(f"could not load config `{path}`: {error}") from error
+    if not isinstance(data, dict):
+        raise ValueError("config root must be a TOML table")
+    return data, path
+
+
+def get_wallust_options(args: argparse.Namespace, data: dict[str, Any]) -> tuple[Path, str, int, int, int | None]:
+    settings = data.get("wallust", {})
+    if not isinstance(settings, dict):
+        raise ValueError("config [wallust] must be a TOML table")
+    enabled = settings.get("enabled", False)
+    if not isinstance(enabled, bool):
+        raise ValueError("config [wallust].enabled must be true or false")
+
+    palette_value = args.palette or settings.get("palette_file")
+    color_key = args.color_key or settings.get("color_key", "accent")
+    cluster = args.cluster if args.cluster is not None else settings.get("cluster")
+    effect_index = args.effect_index if args.effect_index is not None else settings.get("effect_index")
+    device = args.device
+
+    all_explicit = all(
+        value is not None
+        for value in (args.palette, args.color_key, args.cluster, args.effect_index)
+    )
+    if not enabled and not all_explicit:
+        raise ValueError(
+            "Wallust integration is disabled or incomplete; set wallust.enabled = true and configure its target, or pass --palette, --color-key, --cluster, and --effect-index"
+        )
+    if not isinstance(palette_value, str) or not palette_value.strip():
+        raise ValueError("a palette file path is required (config [wallust].palette_file or --palette)")
+    if color_key not in COLOR_KEYS:
+        raise ValueError("color key must be background, foreground, accent, or secondary")
+    if not isinstance(cluster, int) or isinstance(cluster, bool) or not 0 <= cluster <= 31:
+        raise ValueError("cluster must be an integer in 0..=31 from `g102-control rgb effects`")
+    if not isinstance(effect_index, int) or isinstance(effect_index, bool) or not 0 <= effect_index <= 63:
+        raise ValueError("effect index must be an integer in 0..=63 from `g102-control rgb effects`")
+    if device is not None and device < 0:
+        raise ValueError("device index must be non-negative")
+    return expand_path(palette_value), color_key, cluster, effect_index, device
+
+
+def read_palette(path: Path, color_key: str) -> str:
+    try:
+        with path.open("r", encoding="utf-8") as stream:
+            palette = json.load(stream)
+    except FileNotFoundError as error:
+        raise ValueError(f"palette file not found: `{path}`") from error
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise ValueError(f"could not read valid palette JSON from `{path}`: {error}") from error
+    if not isinstance(palette, dict) or palette.get("schema") != SCHEMA:
+        raise ValueError(f"palette must use schema `{SCHEMA}`")
+    colors = palette.get("colors")
+    if not isinstance(colors, dict):
+        raise ValueError("palette `colors` must be a JSON object")
+    color = colors.get(color_key)
+    if not isinstance(color, str) or not HEX_COLOR.fullmatch(color):
+        raise ValueError(f"palette color `{color_key}` must be six hexadecimal digits (RRGGBB)")
+    return color.removeprefix("#").upper()
+
+
+def verify_static_slot(output: str, cluster: int, effect_index: int) -> None:
+    lines = output.splitlines()
+    current_cluster: int | None = None
+    for line in lines:
+        header = CLUSTER_HEADER.match(line)
+        if header:
+            current_cluster = int(header.group(1))
+            continue
+        if current_cluster == cluster:
+            match = STATIC_EFFECT.match(line)
+            if match and int(match.group(1)) == effect_index:
+                return
+    raise ValueError(
+        f"cluster {cluster}, effect index {effect_index} is not reported as Static color (0x0001); inspect `g102-control rgb effects` and select a reported static-color slot"
+    )
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Explicitly set a reported static RGB effect from a Wallust palette. Does not write onboard memory."
+    )
+    parser.add_argument("--config", help="TOML config path (default: XDG g102-control config)")
+    parser.add_argument("--no-config", action="store_true", help="ignore the default config")
+    parser.add_argument("--palette", help="Wallust-rendered palette JSON path")
+    parser.add_argument("--color-key", choices=sorted(COLOR_KEYS), help="semantic palette color (default: accent)")
+    parser.add_argument("--cluster", type=int, help="cluster index reported by rgb effects")
+    parser.add_argument("--effect-index", type=int, help="static effect slot reported by rgb effects")
+    parser.add_argument("--device", type=int, help="candidate index; overrides configured device identity")
+    parser.add_argument("--g102-control", default="g102-control", help="CLI executable (primarily for tests)")
+    return parser
+
+
+def run(args: argparse.Namespace) -> int:
+    config, config_path = read_config(args)
+    palette_path, color_key, cluster, effect_index, device = get_wallust_options(args, config)
+    color = read_palette(palette_path, color_key)
+
+    common = [args.g102_control]
+    if args.no_config:
+        common.append("--no-config")
+    elif config_path is not None:
+        common.extend(("--config", str(config_path)))
+    if device is not None:
+        common.extend(("--device", str(device)))
+
+    try:
+        effects = subprocess.run(
+            [*common, "rgb", "effects"], check=True, text=True, capture_output=True
+        )
+    except FileNotFoundError as error:
+        raise ValueError(f"could not execute `{args.g102_control}`; install g102-control or use --g102-control") from error
+    except subprocess.CalledProcessError as error:
+        detail = error.stderr.strip() or error.stdout.strip() or f"exit status {error.returncode}"
+        raise ValueError(f"could not inspect RGB effects: {detail}") from error
+    verify_static_slot(effects.stdout, cluster, effect_index)
+
+    command = [*common, "rgb", "set", str(cluster), str(effect_index), color]
+    print(
+        f"Applying Wallust {color_key} color #{color} to reported static RGB cluster {cluster}, effect slot {effect_index}.",
+        file=sys.stderr,
+    )
+    try:
+        return subprocess.run(command, check=False).returncode
+    except FileNotFoundError as error:
+        raise ValueError(f"could not execute `{args.g102_control}`") from error
+
+
+def main() -> int:
+    args = build_parser().parse_args()
+    try:
+        return run(args)
+    except ValueError as error:
+        print(f"g102-control-wallust: error: {error}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

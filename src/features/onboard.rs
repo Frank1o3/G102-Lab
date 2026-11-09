@@ -126,6 +126,8 @@ pub enum ButtonAction {
     Unknown([u8; 4]),
 }
 
+/// Standard names for recognized mouse-mask encodings. The labels do not
+/// establish which physical G102 button corresponds to a profile slot.
 pub fn mouse_button_label(mask: u16) -> Option<&'static str> {
     match mask {
         0x0001 => Some("Left"),
@@ -147,7 +149,7 @@ pub fn special_code_label(code: u8) -> Option<&'static str> {
         0x02 => Some("Tilt Right"),
         0x03 => Some("Next DPI"),
         0x04 => Some("Previous DPI"),
-        0x05 => Some("Cycle DPI (reference label; corroborated on G102)"),
+        0x05 => Some("Cycle DPI (reference label; behavior unverified)"),
         0x06 => Some("Default DPI"),
         0x07 => Some("Shift DPI"),
         0x08 => Some("Next Profile"),
@@ -221,8 +223,10 @@ impl ButtonAction {
         }
     }
 
-    /// Returns whether this action has verified hardware backing on the G102 LIGHTSYNC (format 4).
-    pub fn is_verified_g102(&self) -> bool {
+    /// Returns whether this four-byte encoding is represented in the supplied
+    /// G102 backup or accepted by the evidence-scoped offline editor. This does
+    /// not verify behavior or map the stored slot to a physical button.
+    pub fn is_corroborated_g102_encoding(&self) -> bool {
         match self {
             Self::MouseButton { mask, .. } => matches!(*mask, 1 | 2 | 4 | 8 | 16),
             Self::Special {
@@ -272,6 +276,8 @@ impl ButtonAction {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Encodings accepted by the offline profile editor. The legacy type name does
+/// not imply that physical action behavior or button positions are verified.
 pub enum VerifiedAction {
     LeftClick,
     RightClick,
@@ -317,7 +323,7 @@ impl std::str::FromStr for VerifiedAction {
                     ))
                 } else {
                     Err(FeatureError::Malformed(
-                        "unsupported or unverified action; verified targets are: left, right, middle, back, forward, dpi-cycle, disable",
+                        "unsupported or unverified action; accepted offline encodings are: left, right, middle, back, forward, dpi-cycle, disable",
                     ))
                 }
             }
@@ -2140,7 +2146,7 @@ mod tests {
                 label: Some("Back")
             }
         );
-        assert!(action.is_verified_g102());
+        assert!(action.is_corroborated_g102_encoding());
         assert_eq!(action.to_bytes(), mouse_raw);
 
         // Keyboard
@@ -2153,17 +2159,18 @@ mod tests {
                 key: 0x2f
             }
         );
-        assert!(!action.is_verified_g102());
+        assert!(!action.is_corroborated_g102_encoding());
         assert_eq!(action.to_bytes(), key_raw);
 
         // Consumer
         let cons_raw = [0x80, 0x03, 0x02, 0x24];
         let action = ButtonAction::from_bytes(cons_raw);
         assert_eq!(action, ButtonAction::Consumer { usage: 0x0224 });
-        assert!(!action.is_verified_g102());
+        assert!(!action.is_corroborated_g102_encoding());
         assert_eq!(action.to_bytes(), cons_raw);
 
-        // Special DPI Cycle (verified on G102)
+        // Matching special-action bytes occur in the supplied backup;
+        // runtime behavior remains unverified.
         let special_g102 = [0x90, 0x05, 0xff, 0xff];
         let action = ButtonAction::from_bytes(special_g102);
         assert!(matches!(
@@ -2174,13 +2181,13 @@ mod tests {
                 ..
             }
         ));
-        assert!(action.is_verified_g102());
+        assert!(action.is_corroborated_g102_encoding());
         assert_eq!(action.to_bytes(), special_g102);
 
-        // Special other code (unverified on G102)
+        // Other special-action encoding is not accepted by the offline editor.
         let special_unverified = [0x90, 0x03, 0x00, 0x00];
         let action = ButtonAction::from_bytes(special_unverified);
-        assert!(!action.is_verified_g102());
+        assert!(!action.is_corroborated_g102_encoding());
         assert_eq!(action.to_bytes(), special_unverified);
 
         // Macro
@@ -2193,14 +2200,14 @@ mod tests {
                 address: 0x0304
             }
         );
-        assert!(!action.is_verified_g102());
+        assert!(!action.is_corroborated_g102_encoding());
         assert_eq!(action.to_bytes(), macro_raw);
 
         // Disabled
         let dis_raw = [0xff, 0xff, 0xff, 0xff];
         let action = ButtonAction::from_bytes(dis_raw);
         assert_eq!(action, ButtonAction::Disabled);
-        assert!(action.is_verified_g102());
+        assert!(action.is_corroborated_g102_encoding());
         assert_eq!(action.to_bytes(), dis_raw);
 
         // Disabled (zeros)
@@ -2212,7 +2219,7 @@ mod tests {
         let unk_raw = [0x77, 0x88, 0x99, 0xaa];
         let action = ButtonAction::from_bytes(unk_raw);
         assert_eq!(action, ButtonAction::Unknown(unk_raw));
-        assert!(!action.is_verified_g102());
+        assert!(!action.is_corroborated_g102_encoding());
         assert_eq!(action.to_bytes(), unk_raw);
     }
 
@@ -2466,8 +2473,25 @@ mod tests {
     #[test]
     fn save_backup_file_refuses_to_overwrite_input_file() {
         let backup = decode_backup(include_bytes!("../../g102-backup.obk")).unwrap();
-        let result = save_backup_file("/tmp/same.obk", &backup, Some("/tmp/same.obk"));
+        let modified = create_button_remap_plan(&backup, &[(4, VerifiedAction::RightClick)])
+            .unwrap()
+            .modified_backup;
+        let path =
+            std::env::temp_dir().join(format!("g102_do_not_overwrite_{}.obk", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let original_bytes = encode_backup(
+            &backup.info,
+            backup.mode,
+            backup.current_profile_raw,
+            &backup.sectors,
+        )
+        .unwrap();
+        std::fs::write(&path, &original_bytes).unwrap();
+
+        let result = save_backup_file(path.to_str().unwrap(), &modified, path.to_str());
         assert!(result.is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), original_bytes);
+        let _ = std::fs::remove_file(path);
     }
 
     struct SimulatedG102Device {
@@ -3008,6 +3032,22 @@ mod tests {
 
         // Create modified profile in simulated device
         let plan = create_button_remap_plan(&backup, &[(4, VerifiedAction::RightClick)]).unwrap();
+        let preview = compare_backups(&plan.modified_backup, &backup);
+        assert!(!preview.metadata_changed);
+        assert_eq!(preview.sector_diffs.len(), 1);
+        assert_eq!(preview.sector_diffs[0].0, 1);
+        assert_eq!(
+            preview.sector_diffs[0]
+                .1
+                .iter()
+                .map(|diff| diff.offset)
+                .collect::<Vec<_>>(),
+            [0x2f, 253, 254]
+        );
+        assert_eq!(
+            checksum_candidate(&plan.modified_backup.sectors[1].bytes),
+            ChecksumCandidate::Crc16CcittFalseMatch(plan.new_checksum)
+        );
         let sim = SimulatedG102Device::new_from_backup(&plan.modified_backup);
         assert_eq!(sim.sectors[1], plan.modified_backup.sectors[1].bytes);
 
@@ -3037,15 +3077,167 @@ mod tests {
         assert_eq!(report.state, WriteTransactionState::Verified);
         assert_eq!(report.sectors_written, vec![1]);
 
+        // The safety backup captures the modified pre-restore profile and CRC.
+        let safety = decode_backup(&std::fs::read(&safety_file).unwrap()).unwrap();
+        assert_eq!(
+            safety.sectors[1].bytes,
+            plan.modified_backup.sectors[1].bytes
+        );
+        assert_eq!(
+            safety.sectors[1].checksum_candidate,
+            ChecksumCandidate::Crc16CcittFalseMatch(plan.new_checksum)
+        );
+
         // Safety backup of modified state was created
         assert!(safety_file.exists());
 
         // Simulated device now has original sector 1 bytes
         let sim_dev = client.into_transport();
         assert_eq!(sim_dev.sectors[1], backup.sectors[1].bytes);
+        assert!(
+            sim_dev
+                .sectors
+                .iter()
+                .zip(&backup.sectors)
+                .all(|(actual, expected)| actual == &expected.bytes)
+        );
+        assert_eq!(
+            checksum_candidate(&sim_dev.sectors[1]),
+            backup.sectors[1].checksum_candidate
+        );
+        assert_eq!(
+            std::fs::read(&orig_file).unwrap(),
+            encode_backup(
+                &backup.info,
+                backup.mode,
+                backup.current_profile_raw,
+                &backup.sectors
+            )
+            .unwrap(),
+            "restore must not overwrite the original backup"
+        );
 
         let _ = std::fs::remove_file(&orig_file);
         let _ = std::fs::remove_file(&safety_file);
+    }
+
+    #[test]
+    fn restore_preview_from_mock_is_non_empty_and_read_only() {
+        let backup = decode_backup(include_bytes!("../../g102-backup.obk")).unwrap();
+        let modified = create_button_remap_plan(&backup, &[(4, VerifiedAction::RightClick)])
+            .unwrap()
+            .modified_backup;
+        let sim = SimulatedG102Device::new_from_backup(&modified);
+        let mut client = HidppClient::new(sim, 0xff, ReportKind::Long);
+
+        let info = read_info(&mut client, 0x0f).unwrap();
+        let mode = read_mode(&mut client, 0x0f).unwrap();
+        let current_profile_raw = read_current_profile_raw(&mut client, 0x0f).unwrap();
+        let sectors = read_writable_memory(&mut client, 0x0f, &info).unwrap();
+        let current = RawBackup {
+            info,
+            mode,
+            current_profile_raw,
+            sectors,
+        };
+
+        let preview = compare_backups(&current, &backup);
+        assert!(!preview.metadata_changed);
+        assert_eq!(preview.sector_diffs.len(), 1);
+        assert_eq!(preview.sector_diffs[0].0, 1);
+        assert_eq!(
+            preview.sector_diffs[0]
+                .1
+                .iter()
+                .map(|diff| diff.offset)
+                .collect::<Vec<_>>(),
+            [0x2f, 253, 254]
+        );
+        assert_eq!(
+            checksum_candidate(&current.sectors[1].bytes),
+            modified.sectors[1].checksum_candidate
+        );
+
+        let transport = client.into_transport();
+        assert!(transport.writes.iter().all(|report| {
+            Packet::decode(report)
+                .map(|packet| {
+                    !matches!(
+                        packet.function_id,
+                        FN_START_WRITE | FN_WRITE_DATA | FN_END_WRITE
+                    )
+                })
+                .unwrap_or(false)
+        }));
+    }
+
+    #[test]
+    fn restore_rejects_malformed_backup_before_hid_access() {
+        let backup = decode_backup(include_bytes!("../../g102-backup.obk")).unwrap();
+        let sim = SimulatedG102Device::new_from_backup(&backup);
+        let mut client = HidppClient::new(sim, 0xff, ReportKind::Long);
+        let malformed_path =
+            std::env::temp_dir().join(format!("g102_malformed_restore_{}.obk", std::process::id()));
+        std::fs::write(&malformed_path, b"not a G102OBK1 backup").unwrap();
+
+        let result = execute_profile_restore(&mut client, 0x0f, &malformed_path, true, None, None);
+        assert!(matches!(result, Err(WriteError::InvalidBackup(_))));
+        assert!(client.into_transport().writes.is_empty());
+        let _ = std::fs::remove_file(malformed_path);
+    }
+
+    #[test]
+    fn restore_rejects_invalid_profile_checksum_before_hid_access() {
+        let backup = decode_backup(include_bytes!("../../g102-backup.obk")).unwrap();
+        let mut invalid = backup.clone();
+        invalid.sectors[1].bytes[0x20] ^= 0x01;
+        invalid.sectors[1].checksum_candidate = checksum_candidate(&invalid.sectors[1].bytes);
+        let path =
+            std::env::temp_dir().join(format!("g102_bad_crc_restore_{}.obk", std::process::id()));
+        save_backup_file(path.to_str().unwrap(), &invalid, None).unwrap();
+        let sim = SimulatedG102Device::new_from_backup(&backup);
+        let mut client = HidppClient::new(sim, 0xff, ReportKind::Long);
+
+        let result = execute_profile_restore(&mut client, 0x0f, &path, true, None, None);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("CRC-16/CCITT-FALSE")
+        );
+        assert!(client.into_transport().writes.is_empty());
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn restore_rejects_changes_to_unsupported_sectors_before_write() {
+        let backup = decode_backup(include_bytes!("../../g102-backup.obk")).unwrap();
+        let mut invalid = backup.clone();
+        invalid.sectors[2].bytes[0] = 0;
+        invalid.sectors[2].checksum_candidate = checksum_candidate(&invalid.sectors[2].bytes);
+        let path = std::env::temp_dir().join(format!(
+            "g102_unsupported_sector_restore_{}.obk",
+            std::process::id()
+        ));
+        save_backup_file(path.to_str().unwrap(), &invalid, None).unwrap();
+        let sim = SimulatedG102Device::new_from_backup(&backup);
+        let mut client = HidppClient::new(sim, 0xff, ReportKind::Long);
+
+        let result = execute_profile_restore(&mut client, 0x0f, &path, true, None, None);
+        assert!(matches!(result, Err(WriteError::SafetyRefusal(_))));
+        let transport = client.into_transport();
+        assert!(transport.writes.iter().all(|report| {
+            Packet::decode(report)
+                .map(|packet| {
+                    !matches!(
+                        packet.function_id,
+                        FN_START_WRITE | FN_WRITE_DATA | FN_END_WRITE
+                    )
+                })
+                .unwrap_or(false)
+        }));
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]

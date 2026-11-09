@@ -1,6 +1,7 @@
 use std::process::ExitCode;
 
 use g102_control::{
+    config::{self, AppConfig},
     connect,
     device::DeviceInspection,
     features::{dpi, onboard, report_rate, rgb},
@@ -9,7 +10,25 @@ use g102_control::{
 use hidapi::HidApi;
 
 fn main() -> ExitCode {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let raw_args: Vec<String> = std::env::args().skip(1).collect();
+    if raw_args
+        .first()
+        .is_some_and(|arg| arg == "--version" || arg == "-V")
+    {
+        println!("g102-control {}", env!("CARGO_PKG_VERSION"));
+        return ExitCode::SUCCESS;
+    }
+    if raw_args.iter().any(|arg| arg == "--help" || arg == "-h") {
+        print_help();
+        return ExitCode::SUCCESS;
+    }
+    let (args, config_path, no_config) = match extract_global_options(&raw_args) {
+        Ok(options) => options,
+        Err(error) => {
+            eprintln!("Error: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
     if args
         .first()
         .is_some_and(|arg| arg == "help" || arg == "--help" || arg == "-h")
@@ -17,10 +36,28 @@ fn main() -> ExitCode {
         print_help();
         return ExitCode::SUCCESS;
     }
-    let result = if args.is_empty() || args[0] == "inspect" {
+    if args
+        .first()
+        .is_some_and(|arg| arg == "--version" || arg == "-V")
+    {
+        println!("g102-control {}", env!("CARGO_PKG_VERSION"));
+        return ExitCode::SUCCESS;
+    }
+    let app_config = match AppConfig::load(config_path.as_deref(), no_config) {
+        Ok(config) => config,
+        Err(error) => {
+            eprintln!("Error: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let result = if args.is_empty() {
         inspect()
+    } else if args[0] == "inspect" && args.len() == 1 {
+        inspect()
+    } else if args[0] == "inspect" {
+        Err("inspect accepts no command arguments; use `--help` for usage".into())
     } else {
-        command(&args)
+        command(&args, &app_config)
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -33,8 +70,53 @@ fn main() -> ExitCode {
 
 fn print_help() {
     println!(
-        "Usage:\n  g102-control inspect\n  g102-control dpi get [--device N] [--sensor N]\n  g102-control dpi set <DPI> [--device N] [--sensor N]\n  g102-control rate get|list [--device N]\n  g102-control rate set <HZ> [--device N]\n  g102-control rgb info|effects [--device N]\n  g102-control rgb set <CLUSTER> <EFFECT_INDEX> <RRGGBB> [--period-ms N] [--brightness 1..100] [--direction left|right] [--device N]\n  g102-control onboard info|profiles [--device N]\n  g102-control onboard export <FILE> [--device N]\n  g102-control onboard decode <FILE>\n  g102-control onboard buttons <FILE>\n  g102-control onboard remap <INPUT> [OUTPUT] --slot <1..6> --action <ACTION> [--dry-run]\n  g102-control onboard diff <FILE_A> <FILE_B>\n  g102-control onboard set-button <SLOT> <ACTION> [--confirm-write] [--dry-run] [--device N] [--backup-file FILE] [--commit-timeout-ms MS]\n  g102-control onboard restore <BACKUP_FILE> [--confirm-write] [--dry-run] [--device N] [--backup-file FILE] [--commit-timeout-ms MS]\n\nActions: left, right, middle, back, forward, dpi-cycle, disabled.\nUse rgb effects to see zero-based cluster/effect indexes. Effect IDs 0x00 Off, 0x01 Static, 0x03 Cycle, 0x04 Wave, and 0x0a Breathing have known G102 HID++ layouts. Period defaults to 3000ms (allowed 1000..8000), brightness defaults to 100, and direction defaults right. Color is six-digit hex (e.g. ffffff); cycle/wave ignore it. Writes claim 0x8071 software control and apply to volatile RAM only; no onboard mode or persistent memory is changed. `onboard buttons`, `onboard decode`, `onboard remap`, and `onboard diff` operate strictly on local G102OBK1 backups. Physical `onboard set-button` and `onboard restore` writes are disabled pending exact G102 model/firmware validation; `--confirm-write` does not override this gate."
+        "Usage:\n  g102-control [--config FILE | --no-config] inspect\n  g102-control [--config FILE | --no-config] dpi get [--device N] [--sensor N]\n  g102-control dpi set [DPI] [--device N] [--sensor N]\n  g102-control rate get|list [--device N]\n  g102-control rate set [HZ] [--device N]\n  g102-control rgb info|effects [--device N]\n  g102-control rgb set [CLUSTER [EFFECT_INDEX [RRGGBB]]] [--period-ms N] [--brightness 1..100] [--direction left|right] [--device N]\n  g102-control onboard info|profiles [--device N]\n  g102-control onboard export <FILE> [--device N]\n  g102-control onboard decode <FILE>\n  g102-control onboard buttons <FILE>\n  g102-control onboard remap <INPUT> [OUTPUT] --slot <1..6> --action <ACTION> [--dry-run]\n  g102-control onboard diff <FILE_A> <FILE_B>\n  g102-control onboard set-button <SLOT> <ACTION> [--confirm-write] [--dry-run] [--device N] [--backup-file FILE] [--commit-timeout-ms MS]\n  g102-control onboard restore <BACKUP_FILE> [--confirm-write] [--dry-run] [--device N] [--backup-file FILE] [--commit-timeout-ms MS]\n  g102-control --version\n\nExamples:\n  g102-control inspect\n  g102-control dpi get --sensor 0\n  g102-control rate list\n  g102-control rgb effects\n  g102-control rgb set 0 1 '#89b4fa'\n  g102-control onboard export mouse-backup.obk\n  g102-control onboard decode mouse-backup.obk\n\nOptions:\n  --config FILE  Load a TOML config (default: $XDG_CONFIG_HOME/g102-control/config.toml or ~/.config/g102-control/config.toml)\n  --no-config    Ignore the default config; cannot be combined with --config\n  --device N     Select a candidate from the current enumeration (not a stable identity)\n  -h, --help     Show this help; -V, --version shows the package version\n\nValues explicitly supplied on the command line override config. Config values are defaults only: they never change a device unless a setter command is explicitly run. DPI/rate/RGB setters are implemented but physical behavior is unverified for the target; follow VALIDATION.md before using them.\nUse `rgb effects` to obtain reported zero-based cluster/effect indexes. Setter layouts are implemented for effect IDs 0x00, 0x01, 0x03, 0x04, and 0x0a; other IDs remain read-only. Reported persistence capabilities and setter acknowledgements do not establish persisted behavior.\n`onboard buttons`, `onboard decode`, `onboard remap`, and `onboard diff` operate on local `G102OBK1` backup files. Physical `onboard set-button` and `onboard restore` writes are disabled pending exact G102 model/firmware validation; `--confirm-write` cannot override this gate."
     );
+}
+
+fn extract_global_options(
+    args: &[String],
+) -> Result<(Vec<String>, Option<std::path::PathBuf>, bool), String> {
+    let mut command_args = Vec::new();
+    let mut config_path = None;
+    let mut no_config = false;
+    let mut index = 0;
+    while index < args.len() {
+        let value = &args[index];
+        if value == "--config" {
+            if config_path.is_some() {
+                return Err("--config may be specified only once".into());
+            }
+            index += 1;
+            let path = args
+                .get(index)
+                .ok_or_else(|| "--config requires a file path".to_owned())?;
+            if path.is_empty() || path.starts_with('-') {
+                return Err("--config requires a file path".into());
+            }
+            config_path = Some(std::path::PathBuf::from(path));
+        } else if let Some(path) = value.strip_prefix("--config=") {
+            if config_path.is_some() {
+                return Err("--config may be specified only once".into());
+            }
+            if path.is_empty() {
+                return Err("--config requires a file path".into());
+            }
+            config_path = Some(std::path::PathBuf::from(path));
+        } else if value == "--no-config" {
+            if no_config {
+                return Err("--no-config may be specified only once".into());
+            }
+            no_config = true;
+        } else {
+            command_args.push(value.clone());
+        }
+        index += 1;
+    }
+    if no_config && config_path.is_some() {
+        return Err("--config and --no-config cannot be used together".into());
+    }
+    Ok((command_args, config_path, no_config))
 }
 
 fn hid_api() -> Result<HidApi, String> {
@@ -51,6 +133,7 @@ fn inspect() -> Result<(), String> {
         println!("No Logitech HID++ vendor collections found (VID 046d, usage page ff00).");
         return Ok(());
     }
+    let mut inspected = 0;
     for (index, candidate) in devices.iter().enumerate() {
         println!(
             "Candidate {index}: {} PID {:04x}, interface {}, usage page {:04x}, usage {:04x}",
@@ -61,14 +144,20 @@ fn inspect() -> Result<(), String> {
             candidate.usage
         );
         match connect(&api, candidate.clone()) {
-            Ok(connected) => print_inspection(&connected.inspection),
+            Ok(connected) => {
+                inspected += 1;
+                print_inspection(&connected.inspection);
+            }
             Err(error) => println!("  HID++ probe: {error}\n  No device settings were written."),
         }
+    }
+    if inspected == 0 {
+        return Err("could not inspect any HID++ endpoint; check the scoped udev permissions and reconnect the device".into());
     }
     Ok(())
 }
 
-fn command(args: &[String]) -> Result<(), String> {
+fn command(args: &[String], app_config: &AppConfig) -> Result<(), String> {
     if args.len() < 2 {
         return Err("expected dpi, rate, rgb, or onboard command; use --help".into());
     }
@@ -96,13 +185,17 @@ fn command(args: &[String]) -> Result<(), String> {
     }
     let mut positional = Vec::new();
     let mut device_index = None;
-    let mut sensor_index = 0u8;
-    let mut effect_period_ms = 3000u16;
-    let mut effect_brightness = 100u8;
-    let mut wave_direction = rgb::WaveDirection::Right;
+    let mut sensor_index = app_config.dpi.sensor;
+    let mut effect_period_ms = app_config.rgb.period_ms;
+    let mut effect_brightness = app_config.rgb.brightness;
+    let mut wave_direction = match app_config.rgb.direction.as_str() {
+        "left" => rgb::WaveDirection::Left,
+        _ => rgb::WaveDirection::Right,
+    };
     let mut remap_slot = None;
     let mut remap_action = None;
     let mut dry_run = false;
+    let mut confirm_write = false;
     let mut backup_file = None;
     let mut commit_timeout_ms = None;
     let mut i = 2;
@@ -111,7 +204,7 @@ fn command(args: &[String]) -> Result<(), String> {
             "--dry-run" => {
                 dry_run = true;
             }
-            "--confirm-write" => {}
+            "--confirm-write" => confirm_write = true,
             "--backup-file" => {
                 i += 1;
                 let value = args
@@ -174,11 +267,17 @@ fn command(args: &[String]) -> Result<(), String> {
                         }
                         "--period-ms" => {
                             effect_period_ms = u16::try_from(parsed)
-                                .map_err(|_| "period must fit in 0..=65535 ms".to_owned())?
+                                .map_err(|_| "period must fit in 0..=65535 ms".to_owned())?;
+                            if !(1000..=8000).contains(&effect_period_ms) {
+                                return Err("period must be in 1000..=8000 ms".into());
+                            }
                         }
                         "--brightness" => {
                             effect_brightness = u8::try_from(parsed)
-                                .map_err(|_| "brightness must fit in 0..=255".to_owned())?
+                                .map_err(|_| "brightness must fit in 0..=255".to_owned())?;
+                            if !(1..=100).contains(&effect_brightness) {
+                                return Err("brightness must be in 1..=100".into());
+                            }
                         }
                         _ => unreachable!(),
                     }
@@ -271,6 +370,9 @@ fn command(args: &[String]) -> Result<(), String> {
     }
 
     if family == "onboard" && action == "set-button" {
+        if positional.len() > 2 {
+            return Err("onboard set-button accepts at most <SLOT> <ACTION>".into());
+        }
         if remap_slot.is_none() && !positional.is_empty() {
             let slot_val: usize = positional[0]
                 .parse()
@@ -301,22 +403,70 @@ fn command(args: &[String]) -> Result<(), String> {
             return Err(onboard::PROFILE_WRITE_GATE_MESSAGE.into());
         }
     } else {
-        let expected_positional = if family == "rgb" && action == "set" {
-            3
-        } else if family == "onboard" && matches!(action, "export" | "decode" | "buttons") {
-            1
-        } else {
-            usize::from(action == "set")
+        let valid_count = match (family, action) {
+            ("dpi" | "rate", "set") => (0..=1).contains(&positional.len()),
+            ("rgb", "set") => (0..=3).contains(&positional.len()),
+            ("onboard", "export") => positional.len() == 1,
+            _ => positional.is_empty(),
         };
-        if positional.len() != expected_positional {
-            return Err(if expected_positional == 1 {
-                "set requires the expected value(s)"
-            } else {
-                "unexpected positional argument"
-            }
-            .into());
+        if !valid_count {
+            return Err(format!(
+                "unexpected positional arguments for `{family} {action}`; use --help"
+            ));
         }
     }
+
+    if confirm_write && !(family == "onboard" && matches!(action, "set-button" | "restore")) {
+        return Err(
+            "--confirm-write only applies to disabled onboard writes and never enables them".into(),
+        );
+    }
+    if family == "onboard" && action == "set-button" && confirm_write && !dry_run {
+        return Err(onboard::PROFILE_WRITE_GATE_MESSAGE.into());
+    }
+
+    let dpi_value = if family == "dpi" && action == "set" {
+        Some(resolve_u16(
+            positional.first(),
+            app_config.dpi.value,
+            "DPI",
+            1,
+            u16::MAX,
+        )?)
+    } else {
+        None
+    };
+    let rate_value = if family == "rate" && action == "set" {
+        Some(resolve_u16(
+            positional.first(),
+            app_config.rate.hz,
+            "rate",
+            1,
+            1000,
+        )?)
+    } else {
+        None
+    };
+    let rgb_values = if family == "rgb" && action == "set" {
+        let cluster = resolve_u8(positional.first(), app_config.rgb.cluster, "cluster", 31)?;
+        let effect = resolve_u8(
+            positional.get(1),
+            app_config.rgb.effect_index,
+            "effect index",
+            63,
+        )?;
+        let color = positional
+            .get(2)
+            .map(String::as_str)
+            .or(app_config.rgb.color.as_deref())
+            .ok_or(
+                "rgb set requires <CLUSTER> <EFFECT_INDEX> <RRGGBB> or those values in config",
+            )?;
+        let color = parse_rgb(color)?;
+        Some((cluster, effect, color))
+    } else {
+        None
+    };
 
     let api = hid_api()?;
     let candidates: Vec<_> = HidapiTransport::enumerate(&api)
@@ -326,21 +476,7 @@ fn command(args: &[String]) -> Result<(), String> {
     if candidates.is_empty() {
         return Err("no Logitech HID++ vendor collections found".into());
     }
-    let selected = match device_index {
-        Some(index) => candidates.get(index).ok_or_else(|| {
-            format!(
-                "device candidate {index} does not exist ({} candidate(s) found)",
-                candidates.len()
-            )
-        })?,
-        None if candidates.len() == 1 => &candidates[0],
-        None => {
-            return Err(format!(
-                "{} candidates found; select one with --device N",
-                candidates.len()
-            ));
-        }
-    };
+    let selected = select_candidate(&candidates, device_index, app_config)?;
     let connected = connect(&api, selected.clone())
         .map_err(|error| format!("could not connect/probe candidate: {error}"))?;
     let feature_id = match family {
@@ -361,9 +497,7 @@ fn command(args: &[String]) -> Result<(), String> {
                 .map_err(|e| e.to_string())?,
         ),
         ("dpi", "set") => {
-            let value: u16 = positional[0]
-                .parse()
-                .map_err(|_| "DPI must be an integer in 1..=65535".to_owned())?;
+            let value = dpi_value.expect("DPI set value validated before HID access");
             let sensor = dpi::set_dpi(&mut client, feature.index, sensor_index, value)
                 .map_err(|e| e.to_string())?;
             println!(
@@ -375,9 +509,7 @@ fn command(args: &[String]) -> Result<(), String> {
             print_rates(report_rate::read(&mut client, feature.index).map_err(|e| e.to_string())?)
         }
         ("rate", "set") => {
-            let value: u16 = positional[0]
-                .parse()
-                .map_err(|_| "rate must be an integer Hz value".to_owned())?;
+            let value = rate_value.expect("rate set value validated before HID access");
             let info = report_rate::set_hz(&mut client, feature.index, value)
                 .map_err(|e| e.to_string())?;
             println!(
@@ -389,13 +521,8 @@ fn command(args: &[String]) -> Result<(), String> {
             print_rgb(rgb::inspect(&mut client, feature.index).map_err(|e| e.to_string())?)
         }
         ("rgb", "set") => {
-            let cluster: u8 = positional[0]
-                .parse()
-                .map_err(|_| "cluster must be an integer in 0..=255")?;
-            let effect: u8 = positional[1]
-                .parse()
-                .map_err(|_| "effect index must be an integer in 0..=255")?;
-            let color = parse_rgb(&positional[2])?;
+            let (cluster, effect, color) =
+                rgb_values.expect("RGB values validated before HID access");
             let caps = rgb::inspect(&mut client, feature.index).map_err(|e| e.to_string())?;
             let id = caps.clusters.get(cluster as usize)
                 .and_then(|cluster_info| cluster_info.effects.iter().find(|item| item.local_slot == effect))
@@ -426,7 +553,7 @@ fn command(args: &[String]) -> Result<(), String> {
             rgb::set_effect(&mut client, feature.index, cluster, effect, settings)
                 .map_err(|e| e.to_string())?;
             println!(
-                "Device acknowledged effect 0x{id:04x} for cluster {cluster}, effect index {effect} (volatile RAM). Read-back is not available; visible output and persistence are not verified."
+                "Device acknowledged RGB setter for effect 0x{id:04x}, cluster {cluster}, effect index {effect}. The request includes persistence parameter 0x01 as described by references; actual display/effect persistence is unverified. No 0x8100 onboard-flash request was sent."
             );
         }
         ("onboard", "info" | "profiles") => {
@@ -697,6 +824,90 @@ fn print_onboard(info: &onboard::OnboardInspection, has_8110: bool, feature_vers
     );
 }
 
+fn select_candidate<'a>(
+    candidates: &'a [g102_control::HidppDeviceInfo],
+    device_index: Option<usize>,
+    app_config: &AppConfig,
+) -> Result<&'a g102_control::HidppDeviceInfo, String> {
+    if let Some(index) = device_index {
+        return candidates.get(index).ok_or_else(|| {
+            format!(
+                "device candidate {index} does not exist ({} candidate(s) found)",
+                candidates.len()
+            )
+        });
+    }
+    if let (Some(vendor_id), Some(product_id)) =
+        (app_config.device.vendor_id, app_config.device.product_id)
+    {
+        let matches: Vec<_> = candidates
+            .iter()
+            .filter(|candidate| {
+                candidate.vendor_id == vendor_id
+                    && candidate.product_id == product_id
+                    && app_config
+                        .device
+                        .interface_number
+                        .is_none_or(|interface| candidate.interface_number == interface)
+            })
+            .collect();
+        return match matches.as_slice() {
+            [candidate] => Ok(*candidate),
+            [] => Err("configured preferred device was not found; run `inspect` or use --device N".into()),
+            _ => Err("configured preferred device matches multiple endpoints; add interface_number or use --device N".into()),
+        };
+    }
+    match candidates {
+        [candidate] => Ok(candidate),
+        [] => Err("no Logitech HID++ vendor collections found".into()),
+        _ => Err(format!(
+            "{} candidates found; select one with --device N",
+            candidates.len()
+        )),
+    }
+}
+
+fn resolve_u16(
+    value: Option<&String>,
+    configured: Option<u16>,
+    name: &str,
+    minimum: u16,
+    maximum: u16,
+) -> Result<u16, String> {
+    let parsed = match value {
+        Some(value) => value
+            .parse::<u16>()
+            .map_err(|_| format!("{name} must be an integer in {minimum}..={maximum}"))?,
+        None => configured.ok_or_else(|| {
+            format!("{name} is required; provide it on the command line or in config")
+        })?,
+    };
+    if !(minimum..=maximum).contains(&parsed) {
+        return Err(format!("{name} must be in {minimum}..={maximum}"));
+    }
+    Ok(parsed)
+}
+
+fn resolve_u8(
+    value: Option<&String>,
+    configured: Option<u8>,
+    name: &str,
+    maximum: u8,
+) -> Result<u8, String> {
+    let parsed = match value {
+        Some(value) => value
+            .parse::<u8>()
+            .map_err(|_| format!("{name} must be an integer in 0..={maximum}"))?,
+        None => configured.ok_or_else(|| {
+            format!("{name} is required; provide it on the command line or in config")
+        })?,
+    };
+    if parsed > maximum {
+        return Err(format!("{name} must be in 0..={maximum}"));
+    }
+    Ok(parsed)
+}
+
 fn print_decoded_backup(backup: &onboard::RawBackup) -> Result<(), String> {
     let i = &backup.info;
     println!(
@@ -849,10 +1060,10 @@ fn print_button_table(backup: &onboard::RawBackup) -> Result<(), String> {
     );
     for button in &profile.buttons {
         let offset = 0x20 + (button.slot - 1) * 4;
-        let verified_status = if button.action.is_verified_g102() {
-            "Verified on G102"
+        let encoding_status = if button.action.is_corroborated_g102_encoding() {
+            "Encoding corroborated; behavior/position unverified"
         } else {
-            "Unverified on G102"
+            "Encoding unverified"
         };
         println!(
             "    Slot {} [0x{:02x}..0x{:02x}]: {:02x?} -> {} [{}]",
@@ -861,19 +1072,19 @@ fn print_button_table(backup: &onboard::RawBackup) -> Result<(), String> {
             offset + 4,
             button.raw,
             button.action.display_description(),
-            verified_status
+            encoding_status
         );
     }
     println!();
     println!("Evidence & Safety Constraints:");
     println!(
-        "  - Stored slot ordering is sequential (slots 1..=6). Default assignments match standard physical"
+        "  - Stored slot ordering is sequential (slots 1..=6); action names describe decoded encodings only."
     );
     println!(
-        "    buttons, but physical button mapping is unverified without behavioral tracing on hardware."
+        "    Action behavior and mapping to physical buttons are unverified without behavioral tracing."
     );
     println!(
-        "  - Verified remappable targets: left, right, middle, back, forward, dpi-cycle, disable."
+        "  - Offline editor accepts these action encodings: left, right, middle, back, forward, dpi-cycle, disable."
     );
     println!(
         "  - Unverified targets (keyboard key combos, consumer controls, macros, other special codes)"
@@ -1029,29 +1240,24 @@ fn checksum_label(checksum: onboard::ChecksumCandidate) -> String {
 }
 
 fn parse_rgb(value: &str) -> Result<[u8; 3], String> {
-    let hex = value.strip_prefix('#').unwrap_or(value);
-    if hex.len() != 6 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
-        return Err("color must be six hexadecimal digits (RRGGBB)".into());
-    }
-    Ok([
-        u8::from_str_radix(&hex[0..2], 16).unwrap(),
-        u8::from_str_radix(&hex[2..4], 16).unwrap(),
-        u8::from_str_radix(&hex[4..6], 16).unwrap(),
-    ])
+    config::validate_color(value)
 }
 
 fn print_rgb(info: rgb::LightingInfo) {
     println!(
-        "HID++ 0x8071 lighting: {} cluster(s); device NV capabilities 0x{:04x}, extended 0x{:04x}. Persistence not established.",
+        "HID++ 0x8071 lighting: {} cluster(s); device-reported NV capability field 0x{:04x}, extended field 0x{:04x}.",
         info.cluster_count, info.nv_capabilities, info.extended_capabilities
     );
     println!(
-        "  Software control flags 0x{:02x}; event flags 0x{:02x}",
+        "  Device-reported software-control flags 0x{:02x}; event flags 0x{:02x}",
         info.software_control.0, info.software_control.1
+    );
+    println!(
+        "  Capability fields do not establish whether an RGB change persisted. Actual display/effect persistence is unverified; this RGB command path does not issue 0x8100 onboard-profile writes."
     );
     for cluster in info.clusters {
         println!(
-            "  Cluster {}: location {} (0x{:04x}); display persistence 0x{:02x}; effect persistence {}; multi-LED pattern {}",
+            "  Cluster {}: location {} (0x{:04x}); reported display-persistence capability 0x{:02x}; reported effect-persistence support {}; multi-LED pattern capability {}",
             cluster.index,
             location_name(cluster.location),
             cluster.location,
@@ -1168,7 +1374,8 @@ fn print_inspection(device: &DeviceInspection) {
 
 #[cfg(test)]
 mod tests {
-    use super::effect_name;
+    use super::{effect_name, extract_global_options, resolve_u16, select_candidate};
+    use g102_control::{HidppDeviceInfo, config::AppConfig};
 
     #[test]
     fn names_known_lightsync_effect_ids_and_leaves_unknown_ids_unassigned() {
@@ -1196,9 +1403,84 @@ mod tests {
                 "--confirm-write".to_owned(),
             ],
         ] {
-            let error = super::command(&args).unwrap_err();
+            let error = super::command(&args, &AppConfig::default()).unwrap_err();
             assert!(error.contains("disabled pending exact G102 model/firmware validation"));
             assert!(error.contains("--confirm-write cannot override this gate"));
         }
+    }
+
+    #[test]
+    fn global_config_options_are_removed_independent_of_position() {
+        let args = [
+            "--config".to_owned(),
+            "custom.toml".to_owned(),
+            "dpi".to_owned(),
+            "get".to_owned(),
+            "--no-config".to_owned(),
+        ];
+        assert!(
+            extract_global_options(&args)
+                .unwrap_err()
+                .contains("cannot be used together")
+        );
+        let args = [
+            "--config=custom.toml".to_owned(),
+            "dpi".to_owned(),
+            "get".to_owned(),
+        ];
+        let (command, path, disabled) = extract_global_options(&args).unwrap();
+        assert_eq!(command, ["dpi", "get"]);
+        assert_eq!(path.unwrap(), std::path::PathBuf::from("custom.toml"));
+        assert!(!disabled);
+    }
+
+    #[test]
+    fn explicit_numeric_argument_overrides_configured_default() {
+        assert_eq!(
+            resolve_u16(Some(&"2000".into()), Some(1600), "DPI", 1, 8000).unwrap(),
+            2000
+        );
+        assert_eq!(resolve_u16(None, Some(1600), "DPI", 1, 8000).unwrap(), 1600);
+        assert!(resolve_u16(Some(&"0".into()), Some(1600), "DPI", 1, 8000).is_err());
+    }
+
+    #[test]
+    fn preferred_device_matches_identity_and_explicit_index_overrides_it() {
+        let candidates = [
+            HidppDeviceInfo {
+                path: "/dev/hidraw1".into(),
+                vendor_id: 0x046d,
+                product_id: 0xc092,
+                usage_page: 0xff00,
+                usage: 1,
+                interface_number: 1,
+                manufacturer: None,
+                product: None,
+            },
+            HidppDeviceInfo {
+                path: "/dev/hidraw2".into(),
+                vendor_id: 0x046d,
+                product_id: 0xc31c,
+                usage_page: 0xff00,
+                usage: 1,
+                interface_number: 1,
+                manufacturer: None,
+                product: None,
+            },
+        ];
+        let mut config = AppConfig::default();
+        config.device.vendor_id = Some(0x046d);
+        config.device.product_id = Some(0xc092);
+        config.device.interface_number = Some(1);
+        assert_eq!(
+            select_candidate(&candidates, None, &config).unwrap().path,
+            "/dev/hidraw1"
+        );
+        assert_eq!(
+            select_candidate(&candidates, Some(1), &config)
+                .unwrap()
+                .path,
+            "/dev/hidraw2"
+        );
     }
 }

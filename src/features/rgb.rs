@@ -1,4 +1,4 @@
-//! HID++ 0x8071 RGB Effects discovery and conservative RAM-only color writes.
+//! HID++ 0x8071 RGB effects discovery and color-set requests; persistence is not established.
 //! Feature indexes are resolved by Root discovery and passed by the caller.
 
 use super::FeatureError;
@@ -9,7 +9,7 @@ const GET_INFO: u8 = 0;
 const SET_CLUSTER_EFFECT: u8 = 1;
 const MANAGE_SW_CONTROL: u8 = 5;
 const ALL: u8 = 0xff;
-const VOLATILE: u8 = 0x01;
+const SETTER_PERSISTENCE_PARAMETER: u8 = 0x01;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EffectSettings {
@@ -41,8 +41,13 @@ pub enum WaveDirection {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LightingInfo {
     pub cluster_count: u8,
+    /// Raw device-reported NV capability field; this is not evidence that a
+    /// particular setting was persisted.
     pub nv_capabilities: u16,
+    /// Raw device-reported extended capability field; meanings are not
+    /// interpreted beyond the queried response.
     pub extended_capabilities: u16,
+    /// Software-control/event status bytes returned by the device query.
     pub software_control: (u8, u8),
     pub clusters: Vec<LightingCluster>,
 }
@@ -51,7 +56,10 @@ pub struct LightingInfo {
 pub struct LightingCluster {
     pub index: u8,
     pub location: u16,
+    /// Raw device-reported display persistence capability byte.
     pub persistence_capabilities: u8,
+    /// Whether the device reports effect persistence support; not whether the
+    /// effect set by this application actually persisted.
     pub effect_persistence_supported: bool,
     pub multi_led_pattern_supported: bool,
     pub effects: Vec<LightingEffect>,
@@ -129,9 +137,10 @@ pub fn inspect<T: crate::hid::HidTransport>(
     })
 }
 
-/// Claim RGB cluster control using the sequence documented by the G102/G203
-/// HID++ reference and write one device-reported effect slot in volatile RAM.
-/// It deliberately does not change 0x8100 mode or any nonvolatile setting.
+/// Send the G102/G203-reference software-control sequence and set a
+/// device-reported effect slot. The setter's final parameter is `0x01`, which
+/// references describe as volatile; actual persistence behavior on the target
+/// is not established. This function sends no 0x8100 onboard-profile requests.
 pub fn set_effect<T: crate::hid::HidTransport>(
     client: &mut HidppClient<T>,
     index: u8,
@@ -153,14 +162,14 @@ pub fn set_effect<T: crate::hid::HidTransport>(
             FeatureError::Malformed("effect index was not reported for this cluster; run `rgb effects` to list valid indexes"),
         )?;
     let effect_params = encode_effect(effect_index, effect.id, settings)?;
-    // The G102-oriented HID++ implementation uses fn 5 params 01 03 05 to
-    // hand control to software. Fn 5 is volatile and doesn't modify profiles.
+    // The reference sequence requests software control. This does not by itself
+    // establish display, effect, or onboard-flash persistence behavior.
     client.request(index, MANAGE_SW_CONTROL, &[0x01, 0x03, 0x05])?;
     let mut params = [0u8; 13];
     params[0] = cluster_index;
     params[1] = effect.local_slot;
     params[2..12].copy_from_slice(&effect_params);
-    params[12] = VOLATILE;
+    params[12] = SETTER_PERSISTENCE_PARAMETER;
     client.request(index, SET_CLUSTER_EFFECT, &params)?;
     Ok(())
 }
@@ -299,7 +308,7 @@ mod tests {
     }
 
     #[test]
-    fn discovers_cluster_effect_ids_capabilities_and_persistence() {
+    fn discovers_cluster_effect_ids_and_reported_persistence_capabilities() {
         let mut client = HidppClient::new(mock(), 0xff, ReportKind::Long);
         let info = inspect(&mut client, 0x0e).unwrap();
         assert_eq!(info.cluster_count, 1);
@@ -311,7 +320,7 @@ mod tests {
     }
 
     #[test]
-    fn static_setter_claims_software_and_uses_volatile_flag() {
+    fn static_setter_claims_software_and_sends_reference_persistence_parameter() {
         let mut client = HidppClient::new(mock(), 0xff, ReportKind::Long);
         set_effect(
             &mut client,
@@ -328,7 +337,7 @@ mod tests {
         assert_eq!(setter[2], 0x0e);
         assert_eq!(setter[3] >> 4, SET_CLUSTER_EFFECT);
         assert_eq!(&setter[4..9], &[0, 0, 0x12, 0x34, 0x56]);
-        assert_eq!(setter[16], VOLATILE);
+        assert_eq!(setter[16], SETTER_PERSISTENCE_PARAMETER);
         assert!(
             transport
                 .writes

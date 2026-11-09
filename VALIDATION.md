@@ -27,7 +27,7 @@ Record date, physical model label, exact VID/PID, product string, firmware, dire
 2. Discover feature IDs, indexes, versions. Repeat and compare.
 3. Read DPI sensor count/list/current/default. Exercise physical DPI button while observing values only if this does not require writes.
 4. Read 8060/8061 presence and supported/current values. Read 8100 mode only; do not switch it.
-5. Read 8071 descriptors, clusters, supported effects and software-control flags. The CLI setter claims software control using the G102 reference sequence and sends the effect with volatile-only flag `0x01`; it never changes onboard mode or NV configuration. This path is reference-derived and its successful visual result on the user's target still needs confirmation. Do not infer three independently addressable clusters; use the returned cluster count. Never use 0x8070 unless the endpoint actually advertises it and a separate codec is implemented.
+5. Read 8071 descriptors, clusters, supported effects and software-control flags. The CLI setter sends the G102-reference software-control sequence and setter parameter `0x01`; the reference describes the parameter as volatile, but target display/effect persistence has not been established. `rgb info` capability fields are not evidence that a particular setting persisted. This path is reference-derived and its visible result on the target still needs confirmation. The command does not issue 0x8100 onboard-profile writes. Do not infer three independently addressable clusters; use the returned cluster count. Unknown effect IDs remain read-only. Never use 0x8070 unless the endpoint advertises it and a separate codec is implemented.
 6. Read 8100 profile descriptor, mode, current-profile response, directory and bounded sector contents. Current CLI operations use only getInfo/getMode/getCurrentProfile/memoryRead and do not switch mode or select profiles. Export preserves all writable sectors in a `G102OBK1` local container. The original Phase 4 implementation labeled directory and checksum interpretations as candidates pending a backup. Phase 5 validated the directory association and CRC against the supplied backup; see Phase 5 evidence below.
 7. Record whether 1b04/8110 is advertised; do not set remapping. 0x8110 remains separate from profile storage.
 
@@ -39,7 +39,7 @@ The 0x2201 and 0x8060 setter code is implemented and exercised only against scri
 
 These other physical mutations must remain unavailable until their specific evidence gates pass:
 
-- RGB software-control takeover, individual colors and effect setters until exact target bytes and visual application are confirmed. The setter uses volatile-only persistence; flash/persistent writes remain unavailable. The CLI does not restore prior software ownership, and ownership cleanup remains a limitation.
+- RGB software-control takeover, individual colors and effect setters until exact target bytes and visual application are confirmed. The setter's parameter `0x01` has a reference-described volatile interpretation, but actual display/effect persistence is unverified. RGB effects and 0x8100 onboard-flash profiles are separate; the CLI does not write onboard profiles. The CLI does not restore prior software ownership, and ownership cleanup remains a limitation.
 - All 8100 sector writes, profile activation, button remap, G-Shift, macros and checksum generation until exact G102 format is documented and tested.
 - 1b04 or 8110 setters until semantics and persistence scope are known.
 
@@ -66,9 +66,9 @@ Run `cargo run -- onboard decode g102-backup.obk` to inspect it.
 Button remapping preparation implements structured action representations, button inspection, offline profile editing, dry-run diffing, and profile integrity validation without hardware communication:
 
 1. **Button table inspection**:
-   `cargo run -- onboard buttons g102-backup.obk` displays the 6 stored button slots at profile sector offset `0x20..0x38`. It notes that stored slots 1..6 correlate with default mouse buttons [Left, Right, Middle, Back, Forward, Cycle DPI], but physical wiring is unverified without hardware click tracing.
+   `cargo run -- onboard buttons g102-backup.obk` displays the six stored four-byte encodings at profile sector offset `0x20..0x38`. Familiar action names are reference interpretations of those bytes; neither their behavior nor their mapping to physical buttons is verified without behavioral hardware tracing.
 2. **Action support & safety gates**:
-   Verified remappable targets are restricted to evidence-corroborated G102 format-4 actions: `left`, `right`, `middle`, `back`, `forward`, `dpi-cycle`, and `disable`. Unverified actions (keyboard modifiers/keys, consumer controls, macros, special codes other than 0x05) are rejected with descriptive errors to prevent profile corruption.
+   The offline editor accepts only the existing encodings `left`, `right`, `middle`, `back`, `forward`, `dpi-cycle`, and `disable`, based on the supplied backup and reference schema. This does not claim their physical behavior or button positions are verified. Keyboard modifiers/keys, consumer controls, macros, and other special codes remain rejected.
 3. **Dry-run modification & byte diffing**:
    `cargo run -- onboard remap g102-backup.obk --slot 4 --action right --dry-run` displays the exact planned changes, old/new checksums, and exact byte diffs (e.g. byte 0x2f changing 0x08 -> 0x02, and CRC at 253..255 changing 0xb3d1 -> 0xdd49). It confirms that all other 252 bytes in sector 1 and all other 15 sectors are untouched.
 4. **Offline file writer safety**:
@@ -93,3 +93,13 @@ Scripted tests cover transaction packet construction, injected start/data/commit
 - Public profile write APIs and CLI `onboard set-button` / `onboard restore` are disabled pending exact model/firmware validation; CLI refusal occurs before HID initialization. Dry-runs and read-only operations remain available. No key-remapping feature was added.
 
 Still hardware-dependent and unresolved: whether the final 256th transfer byte is ignored, consumed, or must have a particular value; worst-case `FN_END_WRITE` latency; whether a matched device error guarantees no commit; whether disconnect clears volatile staging; and which exact G102 USB PID, firmware, and connection mode share the observed read-only profile format. Do not infer these from the backup, mock, references, or marketing name. Resolve via recorded device-specific evidence before considering any physical mutation.
+
+## Phase 9 final refinement (mock/offline only)
+
+The user reports that diagnostics passed on `046d:c092` and that an offline remap changed four bytes in one button record and two CRC bytes while preserving unrelated bytes. This is a user report, not a locally captured session; firmware and connection metadata were not supplied. It supports the offline container transformation only and does not verify physical action behavior or slot-to-button mapping.
+
+RGB reporting distinguishes software-control state, raw/device-reported persistence capability fields, the setter's reference-described parameter `0x01`, and observed persistence. Capability flags and a setter acknowledgement do not prove an effect persisted. The RGB command path does not issue 0x8100 onboard-profile writes. Unknown effect IDs remain visible as unknown and are not set.
+
+Button table status labels refer to encoding evidence, not behavioral verification. Physical button positions and action behavior remain unverified. The offline editor continues to reject keyboard, consumer, macro, and unsupported special-action encodings. Mock/offline tests cover non-empty restore previews, modified-profile restoration and CRC, malformed/checksum-invalid backups, unsupported restore sectors, original-backup preservation, and byte preservation outside the requested action/CRC.
+
+Physical `onboard set-button` and `onboard restore` remain disabled in both the CLI and public APIs; `--confirm-write` cannot override the gate. No physical writes were performed for Phase 9. There is no Piper-like remapping expansion, GUI, daemon, or unknown-effect setter support.

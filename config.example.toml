@@ -1,0 +1,33 @@
+# Copy to ~/.config/g102-control/config.toml and edit it yourself.
+# Loading this file never applies settings to the mouse.
+version=1
+
+[device]
+    # Stable selector fields; use values printed by `g102-control inspect`.
+    # vendor_id = 0x046d
+    # product_id = 0xc092
+    # interface_number = 1
+
+[dpi]
+    sensor=0
+    # value = 1600 # used only by an explicitly invoked `dpi set`
+
+[rate]
+    # hz = 500 # used only by an explicitly invoked `rate set`
+
+[rgb]
+    # Set cluster/effect_index from `g102-control rgb effects`; indexes are device-reported.
+    # cluster = 0
+    # effect_index = 1
+    # color = "#89b4fa"
+    brightness=100
+    direction="right"
+    period_ms=3000
+
+[wallust]
+    color_key="accent"
+    enabled=false
+    palette_file="~/.cache/g102-control/wallust-palette.json"
+    # Configure these only after checking `g102-control rgb effects`.
+    # cluster = 0
+    # effect_index = 1

@@ -1,0 +1,3 @@
+# Only the observed G102 LIGHTSYNC HID++ collection (046d:c092, USB interface 01).
+# uaccess grants access to the active local seat; it does not grant world access.
+SUBSYSTEM=="hidraw", ENV{ID_VENDOR_ID}=="046d", ENV{ID_MODEL_ID}=="c092", ENV{ID_USB_INTERFACE_NUM}=="01", TAG+="uaccess"

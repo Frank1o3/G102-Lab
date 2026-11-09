@@ -40,7 +40,7 @@ Feature codec receives the discovered index/version and raw transport client, th
 
 - DPI: enumerate sensors and ranges; read current/default; setters require supported value. Do not equate runtime DPI and profile stage.
 - Polling: separate 8060/8061 codecs; present listed rates only. A host/onboard mode transition is explicit and potentially persistent, never an implicit setter side effect.
-- Lighting: represent enumerated zones/clusters and effects (IDs separately from local slots). Separate volatile host ownership from persistent/NV capability. Preserve prior ownership and provide explicit release/recovery.
+- Lighting: represent enumerated zones/clusters and effects (IDs separately from local slots). Separate software-control requests, device-reported persistence capabilities, and observed persistence outcomes. Do not infer persistence from capability flags or setter acknowledgements; preserve prior ownership and provide explicit release/recovery when validated.
 - Onboard: descriptor, directory and sector raw bytes first. Decode only a registered, evidence-backed format codec. Read-only interfaces precede any writer interface. Physical profile writes remain disabled until exact G102 model/firmware validation; confirmation alone cannot override the gate. Non-aligned transfers require an explicit unverified tail-byte choice, and all post-commit-request errors remain outcome-unknown unless readback resolves them.
 - Button assignment: typed semantic action and raw preserved form; separate host remaps from onboard profile actions. Unsupported/unknown actions remain opaque and unchanged.
 
@@ -65,7 +65,7 @@ Device manager emits attach/detach/capability/state events. Coordinator applies 
 3. Construct capability snapshot; expose only supported read operations.
 4. User or palette event creates validated desired-state diff.
 5. Coordinator serializes calls through endpoint worker and required feature service.
-6. Read back volatile state when supported; update last-confirmed state.
+6. Read back state when supported; update last-confirmed state without inferring persistence from an acknowledgement.
 7. On unplug, invalidate snapshot; reconnect starts at step 1.
 
 Feature mode transitions and persistent profile writes are not generic startup behavior. They require explicit operation pathways and hardware gates.

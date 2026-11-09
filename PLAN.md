@@ -6,7 +6,7 @@ Each milestone is gated on evidence and acceptance criteria. DPI and polling set
 
 Phases 1 and 2 are implemented in software: packet codec, mockable serialized client, Linux hidapi enumeration, Root/FeatureSet discovery, read-only inspection, and 0x2201 DPI / 0x8060 polling read/set services and CLI. Mock tests validate parsing, dynamic feature indexes, supported-value checks, setters and read-back. No device settings were changed during development, and no connected exact-revision G102 has been verified. Setters never change host/onboard mode and make no persistence claim.
 
-Phase 3 RGB inspection and setters for device-reported Off, Static, Cycle, Wave, and Breathing effects are implemented with mocked protocol coverage. The user supplied a target capability dump and reported an acknowledged static setter that did not visibly light the mouse. The implementation now claims software ownership and uses the volatile flag per G102 references; visual behavior remains unconfirmed. No nonvolatile RGB config or onboard profile is written.
+Phase 3 RGB inspection and setters for device-reported Off, Static, Cycle, Wave, and Breathing effects are implemented with mocked protocol coverage. The user supplied a target capability dump and reported an acknowledged static setter that did not visibly light the mouse. The implementation sends the reference-described software-control sequence and setter parameter `0x01`; actual RGB persistence remains unverified. Device-reported persistence capability fields are not persistence results, and the RGB command path issues no 0x8100 onboard-profile writes.
 
 Phase 4 read-only 0x8100 inspection and raw backup export are implemented. Phase 5 adds strict offline `G102OBK1` parsing and an evidence-scoped format-4 decoder using `g102-backup.obk`. Descriptor, 16x255 writable geometry, six actions, and CRC match on the supplied backup; no mouse writes or mode/profile changes are implemented.
 
@@ -25,6 +25,12 @@ This hardening task does not add Piper-like key remapping or extend offline rema
 - Public profile write APIs and CLI `onboard set-button`/`restore` are disabled until exact G102 model/firmware validation is documented. Dry-run, export, and offline operations remain available.
 
 Hardware-dependent uncertainties remain: whether the 256th transferred byte is ignored/consumed or has a required value; worst-case `FN_END_WRITE` latency; whether a matched device error guarantees no commit; whether disconnect clears volatile staging; and which exact G102 PID/firmware/connection modes share these behaviors. Resolving these requires read-only evidence and separately approved hardware validation. No physical writes were performed.
+
+## Phase 9 — Final refinement and reliability (complete; software-only)
+
+RGB reporting distinguishes software-control requests, device-reported persistence capability fields, reference-described setter parameters, actual display/effect persistence, and separate 0x8100 onboard flash. Button labels identify corroborated encodings only; action behavior and physical slot mapping remain unverified. Unknown effect IDs remain read-only, and unsupported action encodings remain rejected.
+
+Mock/offline tests cover non-empty restore previews, modified-profile restoration and CRC validation, malformed/checksum-invalid backups, unsupported restore sectors, original-backup preservation, and unrelated-byte/sector isolation. The CLI help and diagnostics were reviewed against actual command behavior. Physical write gates remain unchanged. No daemon, GUI, frontend, new remapping capability, or Phase 10 work was added.
 
 ## Milestone 0 — Documentation and evidence baseline
 
@@ -88,11 +94,11 @@ Tasks: enumerate 8071 clusters/effects; establish zone mapping; static color per
 
 Dependency: resolve software-control byte discrepancy and restore path on target hardware.
 
-Outcome: capability-driven 8071 inspection and volatile Off/Static/Cycle/Wave/Breathing setters through HID++ transport.
+Outcome: capability-driven 8071 inspection and Off/Static/Cycle/Wave/Breathing setters through HID++ transport, with persistence behavior unverified.
 
-Acceptance: software parsing and request bytes are mock tested. User hardware readout reports one cluster. A setter ACK was observed but no visible light, leading to a corrected software-control claim and volatile flag; visual output and non-static modes remain unverified. Read-back and persistence remain unavailable/unclaimed.
+Acceptance: software parsing and request bytes are mock tested. User hardware readout reports one cluster. A setter ACK was observed but no visible light, leading to a corrected software-control request sequence. Visual output, persistence semantics, and non-static modes remain unverified. Read-back is unavailable; capability fields are not treated as persistence proof.
 
-Tests: scripted discovery, effect layouts, software-control claim and exact volatile payload; physical visual check is still required before claiming working control.
+Tests: scripted discovery, effect layouts, software-control request and exact setter bytes; physical visual and persistence checks are still required before claiming behavior. Unknown effect IDs remain display-only and are not given setter support.
 
 ## Milestone 6 — Profile read and format decoder (offline format-4 decoder implemented; behavioral meanings partly unresolved)
 

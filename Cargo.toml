@@ -1,13 +1,16 @@
 [package]
-name = "g102-control"
-version = "0.1.0"
-edition = "2024"
-description = "Read-only Logitech HID++ inspection foundation"
-license = "MIT"
+    description="Logitech HID++ discovery, inspection, and explicit controls"
+    edition="2024"
+    license="MIT"
+    name="g102-control"
+    rust-version="1.85"
+    version="0.1.0"
 
 [dependencies]
-hidapi = { version = "2.6.7", default-features = false, features = ["linux-static-hidraw"] }
+    hidapi={version="2.6.7", default-features=false, features=["linux-static-hidraw"]}
+    serde={version="1.0.229", features=["derive"]}
+    toml="1.2.1"
 
 [[bin]]
-name = "g102-control"
-path = "src/main.rs"
+    name="g102-control"
+    path="src/main.rs"

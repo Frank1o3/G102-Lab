@@ -101,7 +101,7 @@ Phase 6 investigated the G102 format-4 button table in detail:
      - Slot 5 (0x30..0x34): `80 01 00 10` (Mouse mask 0x0010, Forward)
      - Slot 6 (0x34..0x38): `90 05 ff ff` (Special 0x05, Cycle DPI)
    - Remaining slots 7..16 in the base-v1 64-byte button block (`0x38..0x60`) are all `0xff`.
-   - Stored slot ordering is sequential 1..6. While default actions match standard physical button positions, physical button mapping remains unverified without behavioral click tracing on physical hardware.
+   - Stored slot ordering is sequential 1..6, and the supplied backup contains mouse-mask/special-action encodings in those slots. Labels such as Left/Right/Cycle DPI are reference interpretations; behavior and physical button mapping remain unverified without hardware tracing.
 2. **Supported action types and parameters**:
    - `0x80 0x01 mm mm`: Mouse button bitmask (16-bit big-endian).
    - `0x80 0x02 mo kk`: Keyboard modifier bitmask and HID usage keycode.
@@ -109,13 +109,11 @@ Phase 6 investigated the G102 format-4 button table in detail:
    - `0x90 ff p0 p1`: Special function opcode `ff` with parameters `[p0, p1]`. In G102 backup, opcode `0x05` uses `[0xff, 0xff]`.
    - `0x0s ss aa aa`: Macro invocation at sector `s`, address `a`.
    - `0xff 0xff 0xff 0xff` / `0x00 0x00 0x00 0x00`: Disabled.
-3. **Actions verified vs unverified for safe modification**:
+3. **Encoding evidence and offline editor policy**:
    - Safely representable: All action types can be losslessly parsed and represented in `ButtonAction`.
-   - Safely modifiable: Only actions with verified G102 format-4 hardware evidence:
-     - Mouse buttons 1..=5 (masks 0x0001, 0x0002, 0x0004, 0x0008, 0x0010)
-     - Special 0x05 DPI Cycle (`[0x90, 0x05, 0xff, 0xff]`)
-     - Disabled (`[0xff, 0xff, 0xff, 0xff]`)
-   - Unverified / Rejected: Keyboard keypresses, consumer control keys, macros, special opcodes other than 0x05, and multi-bit masks are unverified in G102 onboard memory and rejected by the offline profile editor.
+   - Accepted encodings: `left`, `right`, `middle`, `back`, `forward`, `dpi-cycle`, and `disable` are accepted by the offline editor based on bytes in the supplied backup and reference schema. This does not verify action behavior or map stored slots to physical buttons.
+   - The mouse masks 1..=5 and special tuple `[0x90, 0x05, 0xff, 0xff]` occur in the supplied backup; “DPI Cycle” is a reference label and behavior remains untested. The disabled encoding is recognized by the editor but its physical behavior is not established.
+   - Keyboard keypresses, consumer controls, macros, other special opcodes, and unsupported masks remain rejected for editing.
 4. **Checksum and profile integrity requirements**:
    - CRC-16/CCITT-FALSE (poly 0x1021, init 0xffff, no reflection/xorout) over bytes 0..252 (253 bytes), stored big-endian at bytes 253..255.
    - When modifying any button slot, ONLY the 4 bytes corresponding to that slot in `0x20..0x38` and the final 2 CRC bytes may change.
@@ -135,7 +133,7 @@ g203-led set_ls_triple sends three color values tagged zones 1, 2, 3, then send_
 
 The CLI has a capability-driven 0x8071 inspector and effect setter. Root discovery supplies the runtime feature index; no fixed index or 0x8070 fallback is used. Inspection decodes device/cluster/effect fields and reads software-control/event flags. These fields are reference/protocol-derived unless explicitly identified below as user-provided hardware observations. Setter syntax uses the zero-based cluster and effect-local indexes printed by `rgb effects`, then an RGB hex color. Supported named modes are Off, Static, Cycle, Wave and Breathing, using G102-oriented payload layouts. Period is limited to 1000..=8000 ms and brightness to 1..=100. Unknown target effect IDs 0x000d and 0x000e remain read-only.
 
-Before a setter, code sends the G102-oriented fn 5 software-control sequence `[01,03,05]`, then fn 1 with persistence flag `0x01` (volatile RAM per 0x8071 protocol references). This corrects the earlier implementation, which omitted ownership and used flag zero. It does not switch 0x8100 mode, alter NV configuration or claim flash persistence. Software ownership is left active so the host effect can remain visible; restoring firmware ownership would normally replace the host-set effect. There is no hardware-validated release/session cleanup yet. The G102 app source describes these bytes and layouts for G102/G203 Lightsync, but only static request acknowledgement is observed on the user's target so far; visual application and non-static effect behavior still need user confirmation.
+Before a setter, code sends the G102-oriented fn 5 software-control sequence `[01,03,05]`, then fn 1 with setter parameter `0x01`. References describe that parameter as volatile, but target display/effect persistence has not been established. This corrects the earlier implementation, which omitted ownership and sent parameter zero. It does not switch 0x8100 mode and emits no 0x8100 onboard-profile requests. Software ownership is left active; the behavior and persistence consequences of this ownership on the exact target are not fully validated. There is no hardware-validated release/session cleanup yet. The G102 app source describes these bytes and layouts for G102/G203 LIGHTSYNC, but only a static request acknowledgement is observed on the user's target; visual application and non-static effect behavior still need confirmation.
 
 The number of clusters returned by the device is authoritative. g203-led's three tagged LED positions and apply command use direct USB control transfers on interface 1 and are not reused as HID++ cluster layouts.
 
@@ -143,7 +141,7 @@ The number of clusters returned by the device is authoritative. g203-led's three
 
 The user ran `sudo ./target/debug/g102-control rgb effects` on the connected device and supplied this output: one cluster (index 0), location `0x0002`, device NV capabilities `0x0003`, extended capabilities `0x0004`, cluster persistence byte `0x01`; effect IDs/slots were `0x00/0`, `0x01/1`, `0x03/2`, `0x04/3`, `0x0a/4`, `0x0d/5`, and `0x0e/6`. This establishes one currently enumerated independently addressable cluster, identified as Logo by the known location table. It does not establish the advertised physical zone count, nor that cluster persistence capability means settings actually persist.
 
-The user then ran `sudo ./target/debug/g102-control rgb set 0 1 110011`; the CLI reported a successful HID++ response but the mouse did not light. This proves only that the request was acknowledged, not applied. Review found the setter omitted fn 5 software ownership and sent persistence byte 0. The corrected implementation claims software control with `[01,03,05]` and sends volatile flag `01`. No report from the user has yet confirmed visible output after that correction. No color read-back exists; persistence remains unverified.
+The user now reports that diagnostics passed on USB VID:PID `046d:c092`, and that an offline remap changed four bytes in one button record plus two checksum bytes while preserving unrelated bytes. This is user-reported device/backup evidence, not an independently observed session. The offline result corroborates a local file transformation only; it does not verify physical action behavior, slot-to-button mapping, or RGB persistence. Exact firmware and connection metadata were not included with this report.
 
 Based on the G102-oriented reference effect table, CLI labels and setters cover Off (0x00), Static color (0x01), Color cycle (0x03), Color wave (0x04), and Breathing (0x0a). IDs 0x0d and 0x0e remain labeled Unknown effect and are rejected. Although the user readout establishes these effect IDs are advertised by their unit, only static color has had a setter acknowledged; output/parameters for the other effects are not physically verified.
 

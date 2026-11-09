@@ -1,0 +1,52 @@
+pkgname=g102-control
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='Linux CLI for Logitech HID++ inspection and explicit device controls'
+arch=('x86_64')
+url='https://github.com/Frank1o3/G102-Lab'
+license=('MIT')
+options=('!lto')
+depends=('systemd-libs')
+makedepends=('cargo' 'rust' 'pkgconf' 'gcc' 'python')
+optdepends=(
+  'python: optional Wallust adapter (Python 3.11+ standard library)'
+  'wallust: optional palette generation integration'
+)
+source=()
+sha256sums=()
+
+# This recipe intentionally lives below packaging/arch: makepkg's default
+# $startdir/src would otherwise collide with the repository's Rust src/ tree.
+_repo_root="$startdir/../.."
+
+build() {
+  cd "$_repo_root"
+  CARGO_TARGET_DIR="$srcdir/cargo-target" cargo build --release --locked
+}
+
+check() {
+  cd "$_repo_root"
+  CARGO_TARGET_DIR="$srcdir/cargo-target" cargo test --locked
+  python3 -m unittest discover -s scripts -p 'test_*.py'
+}
+
+package() {
+  cd "$_repo_root"
+
+  install -Dm755 "$srcdir/cargo-target/release/g102-control" \
+    "$pkgdir/usr/bin/g102-control"
+  install -Dm755 scripts/g102-control-wallust \
+    "$pkgdir/usr/bin/g102-control-wallust-sync"
+
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+  install -Dm644 docs/CONFIGURATION.md "$pkgdir/usr/share/doc/$pkgname/CONFIGURATION.md"
+  install -Dm644 docs/WALLUST.md "$pkgdir/usr/share/doc/$pkgname/WALLUST.md"
+  install -Dm644 docs/RELEASE_NOTES.md "$pkgdir/usr/share/doc/$pkgname/RELEASE_NOTES.md"
+  install -Dm644 config.example.toml \
+    "$pkgdir/usr/share/$pkgname/examples/config.example.toml"
+  install -Dm644 integrations/wallust/g102-control-palette.json.j2 \
+    "$pkgdir/usr/share/$pkgname/wallust/g102-control-palette.json.j2"
+  install -Dm644 udev/70-g102-control.rules \
+    "$pkgdir/usr/lib/udev/rules.d/70-g102-control.rules"
+}
