@@ -207,7 +207,7 @@ Minimal stack: hidapi or direct hidraw behind trait. hidapi simplifies access bu
 
 Require actual G102: PID/revision/firmware; working HID collection/report types; Root features/indexes/versions; DPI list/current/default and physical stage behavior; polling list/current/mode ownership; RGB feature/zones/effects/payloads/software-control bytes/persistence; 8100 descriptor, profile format/model/macro IDs, sector geometry, raw directory/profile/checksum, button encoding/order, G-Shift/macros and reboot persistence. Read-only first; writes disabled.
 
-Without hardware: verify Wallust variables/version, inspect Linux permissions, decide eventual CLI/service shape, clarify cpg-docs license before copying prose.
+Remaining system/hardware questions: verify post-install `uaccess` ACL and regular-user HID access on the target seat; record exact G102 revision/firmware and validate DPI/rate setters plus RGB visibility/persistence; verify Wallust hook ordering only for a chosen installed release. Wallust variables/template syntax and its configurable target model were checked against upstream docs for Phase 10. Do not copy unlicensed CPG prose; protocol facts are recorded separately.
 
 ## Source locator (repository-relative)
 

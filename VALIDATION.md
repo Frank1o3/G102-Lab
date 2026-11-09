@@ -103,3 +103,19 @@ RGB reporting distinguishes software-control state, raw/device-reported persiste
 Button table status labels refer to encoding evidence, not behavioral verification. Physical button positions and action behavior remain unverified. The offline editor continues to reject keyboard, consumer, macro, and unsupported special-action encodings. Mock/offline tests cover non-empty restore previews, modified-profile restoration and CRC, malformed/checksum-invalid backups, unsupported restore sectors, original-backup preservation, and byte preservation outside the requested action/CRC.
 
 Physical `onboard set-button` and `onboard restore` remain disabled in both the CLI and public APIs; `--confirm-write` cannot override the gate. No physical writes were performed for Phase 9. There is no Piper-like remapping expansion, GUI, daemon, or unknown-effect setter support.
+
+## Phase 10 release/system integration checks (2026-11-09)
+
+Software-only checks added:
+
+- Rust config tests cover defaults, explicit missing files, version/range/unknown-key validation, RGB triplet parsing, and conflicting config flags. CLI tests cover global config options, numeric CLI override over config defaults, preferred device identity, explicit `--device` override, and the onboard write refusal.
+- Python standard-library tests use temporary JSON/TOML files and a fake CLI to verify valid palette invocation, malformed/missing/invalid colors, refusal of non-static/unreported effects, enabled config defaults, and disabled integration behavior.
+- `makepkg --cleanbuild --nodeps` built the release package and ran its Rust/Python tests on CachyOS. The archive was inspected: binaries/helper are mode 0755; docs, sample config, template, license, and udev rule are mode 0644. `ldd` shows libudev as the required non-glibc runtime library (`systemd-libs`).
+- The release binary was invoked from `/tmp`; `--version` worked and invalid command/config inputs returned nonzero before HID access.
+
+System/hardware checks still pending:
+
+- Pacman install/removal was not run because `sudo -n` requires a password in this environment. The recipe and package archive were built/audited, but package-manager lifecycle is not claimed as tested.
+- The rule is scoped to the observed `046d:c092` interface 01 endpoint. It was not installed or reloaded, and no ACL was granted. A regular-user probe before the rule was present saw `Permission denied`; successful non-root access remains unverified.
+- Wallust template syntax was checked against official documentation and adapter behavior against fixtures, but the Wallust executable/hook ordering was not run here.
+- No physical DPI, polling, RGB, or onboard-write operation was run. All physical setting behavior and RGB visibility/persistence remain unverified. The 0x8100 physical writer remains disabled; `--confirm-write` cannot bypass the gate.

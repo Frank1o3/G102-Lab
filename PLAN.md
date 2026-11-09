@@ -151,3 +151,11 @@ Tests: mock multi-endpoint and reconnect; physical long-running test.
 ## Optional future work
 
 Other Logitech G devices, receiver child devices, Bluetooth, more 2202/8061/8070 variants, macro editor, G-Shift UX, GUI and additional palette providers. Each needs a device capability record and hardware evidence; none is required to deliver a safe first G102 library.
+
+## Phase 10 — Release preparation and system integration
+
+Implemented: optional validated TOML config with default < config < CLI precedence; preferred device matching by USB identity/interface; improved CLI help/version/argument errors; an Arch PKGBUILD isolated under `packaging/arch/`; an interface-scoped `046d:c092` udev `uaccess` rule; documentation/example config; Wallust template and explicit static-RGB adapter; MIT license/release notes; and CI for Rust quality gates, tests, release build, adapter tests, and unprivileged Arch package build. No daemon/service/GUI was added, no release was published, and the 0x8100 write gate is unchanged.
+
+The recipe builds directly from a clean checkout with `Cargo.lock`; its isolated makepkg directory prevents `--cleanbuild` from colliding with the Rust `src/` directory. Arch/CachyOS LTO is disabled for this package because the mixed Rust/static-hidapi native link failed with LTO enabled in the CachyOS environment. The local package build passed with `--nodeps` (toolchain/dependencies already present), including mock/offline and Python adapter tests. Archive paths and modes were audited.
+
+Not verified: privileged pacman installation/removal (non-interactive sudo is unavailable), applying/reloading the udev rule, successful post-rule regular-user HID open, actual Wallust invocation/order on an installed Wallust release, or physical DPI/rate/RGB behavior. The pre-rule regular-user probe received `Permission denied`. These are explicit manual system/hardware validation items; no hardware mutation was performed.
