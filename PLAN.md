@@ -2,7 +2,7 @@
 
 Each milestone is gated on evidence and acceptance criteria. DPI and polling setter code now exists, but physical use remains gated on exact-model read-only validation. Onboard-memory mutations remain unavailable until the later safety review and format verification.
 
-## Current implementation status (2026-11-08)
+## Current implementation status (2026-11-09)
 
 Phases 1 and 2 are implemented in software: packet codec, mockable serialized client, Linux hidapi enumeration, Root/FeatureSet discovery, read-only inspection, and 0x2201 DPI / 0x8060 polling read/set services and CLI. Mock tests validate parsing, dynamic feature indexes, supported-value checks, setters and read-back. No device settings were changed during development, and no connected exact-revision G102 has been verified. Setters never change host/onboard mode and make no persistence claim.
 
@@ -10,9 +10,21 @@ Phase 3 RGB inspection and setters for device-reported Off, Static, Cycle, Wave,
 
 Phase 4 read-only 0x8100 inspection and raw backup export are implemented. Phase 5 adds strict offline `G102OBK1` parsing and an evidence-scoped format-4 decoder using `g102-backup.obk`. Descriptor, 16x255 writable geometry, six actions, and CRC match on the supplied backup; no mouse writes or mode/profile changes are implemented.
 
-Phase 6 implements button remapping preparation: structured action representations, button inspection CLI (`onboard buttons FILE`), an offline profile editor (`onboard remap INPUT [OUTPUT] --slot N --action TARGET [--dry-run]`), and byte-level diffing (`onboard diff FILE_A FILE_B`). Unverified actions (keyboard, consumer, macro, unverified special opcodes) are rejected; unrelated sector fields and sectors remain byte-for-byte identical; no hardware write command is implemented.
+Phase 6 implements offline button-remap preparation: structured action representations, button inspection CLI (`onboard buttons FILE`), an offline profile editor (`onboard remap INPUT [OUTPUT] --slot N --action TARGET [--dry-run]`), and byte-level diffing (`onboard diff FILE_A FILE_B`). Unverified actions (keyboard, consumer, macro, unverified special opcodes) are rejected; unrelated sector fields and sectors remain byte-for-byte identical. This path edits local backup files only and is not expanded by Phase 8.
 
-Phase 7 implements safe G102 onboard profile writing: the verified HID++ `0x8100` sector write protocol (`FN_START_WRITE = 6`, `FN_WRITE_DATA = 7` with 16-byte chunking/padding, `FN_END_WRITE = 8` commit), mandatory pre-write automatic backup export and on-disk verification, strict descriptor checking (`1, 4, 1, 6, 255`), sector 1 profile isolation, mandatory `--confirm-write` flag, post-write byte-for-byte readback verification, post-write checksum verification, decoded profile button verification, and backup restoration CLI (`onboard set-button` and `onboard restore`). Scripted transport unit tests verify protocol packets, failure injection at every transaction stage, byte mismatch detection, checksum mismatch detection, and full restoration. Physical hardware write remains guarded by the mandatory `--confirm-write` gate.
+Phase 7 added a scripted 0x8100 write-transaction implementation with backup, sector-1 isolation, checksum, and readback safeguards. Its transaction shape and simulated success are not G102 hardware validation. The 255th-byte treatment and commit behavior were not established; an earlier test's padding convention was only a host-side assertion. The `--confirm-write` flag previously exposed physical mutation despite the documented evidence gate. Phase 8 closes the physical path in both the CLI and public library APIs. No hardware writes were performed.
+
+## Phase 8 — Flash-write protocol hardening (complete; software-only)
+
+This hardening task does not add Piper-like key remapping or extend offline remapping. Existing offline backup editing remains offline-only. It addresses the Phase 7 write transaction solely to make its uncertainty fail closed:
+
+- A non-16-byte-aligned write (including a 255-byte sector) is refused before `FN_START_WRITE` unless a tail byte is explicitly supplied. No default byte is selected; an explicit value remains unverified for G102.
+- `FN_END_WRITE` uses the configurable `WriteOptions::commit_timeout` (2,000 ms policy default). This is not a measured G102 worst-case latency. Every error after the commit request is attempted is `PotentiallyCommitted` unless readback establishes otherwise; no automatic retry or subsequent write is allowed.
+- Transaction states distinguish `Uncommitted`, `PotentiallyCommitted`, `Committed` (acknowledged, not yet verified), and `Verified` (readback checks passed). Recovery guidance is read-only first (`onboard export`, then `onboard diff`) and prohibits restore/write while commit status is unknown.
+- Transport clients reject a response returned after the request deadline. Scripted tests cover delayed and late responses, timeout, disconnection, lost commit acknowledgement, and no retry; they do not establish device behavior.
+- Public profile write APIs and CLI `onboard set-button`/`restore` are disabled until exact G102 model/firmware validation is documented. Dry-run, export, and offline operations remain available.
+
+Hardware-dependent uncertainties remain: whether the 256th transferred byte is ignored/consumed or has a required value; worst-case `FN_END_WRITE` latency; whether a matched device error guarantees no commit; whether disconnect clears volatile staging; and which exact G102 PID/firmware/connection modes share these behaviors. Resolving these requires read-only evidence and separately approved hardware validation. No physical writes were performed.
 
 ## Milestone 0 — Documentation and evidence baseline
 

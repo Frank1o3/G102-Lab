@@ -7,22 +7,22 @@ Evidence is from checked-out references. “Verified” means a reference report
 Root: /home/franklin/Projects/G102-Lab, not a Git repository. No application Cargo project or root docs existed initially. Ten clean Git clones are in references/. No clone was modified. Commits are snapshot values.
 
 | Directory | Upstream | Branch / commit | Language | License |
-|---|---|---|---|---|
-| references/lghub-linux | https://github.com/Airp2008/lghub-linux | master / 6cb4eef | Rust | MIT |
-| references/lowtech | https://github.com/orthory/lowtech | main / ca4357e | Rust + probes | GPL-2.0-or-later |
-| references/OpenGHub | https://github.com/Slyvan25/OpenGHub | master / 55822ca | Rust, TypeScript/Svelte | MIT |
-| references/OpenLogi | https://github.com/AprilNEA/OpenLogi | master / 59ac734 | Rust + UI assets | MIT OR Apache-2.0 |
-| references/g203-led | https://github.com/smasty/g203-led | master / f9d10ba | Python | MIT |
-| references/g102-lightsync-control | https://github.com/ste4ik/g102-lightsync-control | main / 19ee3a2 | Python, Qt | MIT; PySide6 LGPLv3/icon ISC noted |
-| references/Solaar | https://github.com/pwr-Solaar/Solaar | master / e7304c4 | Python | GPL-2.0-or-later |
-| references/logi-ghub-linux | https://github.com/theo-antonescu/logi-ghub-linux | main / 021f4a2 | Python | GPL-2.0-or-later |
-| references/cpg-docs | https://github.com/Logitech/cpg-docs | master / f9107a4 | reStructuredText | No license file found |
-| references/mouse-protocol | https://github.com/OpenMouse-Project/mouse-protocol | main / b62a1cc | TypeScript/docs/captures | AGPL-3.0 |
+| --- | --- | --- | --- | --- |
+| references/lghub-linux | <https://github.com/Airp2008/lghub-linux> | master / 6cb4eef | Rust | MIT |
+| references/lowtech | <https://github.com/orthory/lowtech> | main / ca4357e | Rust + probes | GPL-2.0-or-later |
+| references/OpenGHub | <https://github.com/Slyvan25/OpenGHub> | master / 55822ca | Rust, TypeScript/Svelte | MIT |
+| references/OpenLogi | <https://github.com/AprilNEA/OpenLogi> | master / 59ac734 | Rust + UI assets | MIT OR Apache-2.0 |
+| references/g203-led | <https://github.com/smasty/g203-led> | master / f9d10ba | Python | MIT |
+| references/g102-lightsync-control | <https://github.com/ste4ik/g102-lightsync-control> | main / 19ee3a2 | Python, Qt | MIT; PySide6 LGPLv3/icon ISC noted |
+| references/Solaar | <https://github.com/pwr-Solaar/Solaar> | master / e7304c4 | Python | GPL-2.0-or-later |
+| references/logi-ghub-linux | <https://github.com/theo-antonescu/logi-ghub-linux> | main / 021f4a2 | Python | GPL-2.0-or-later |
+| references/cpg-docs | <https://github.com/Logitech/cpg-docs> | master / f9107a4 | reStructuredText | No license file found |
+| references/mouse-protocol | <https://github.com/OpenMouse-Project/mouse-protocol> | main / b62a1cc | TypeScript/docs/captures | AGPL-3.0 |
 
 ## Repository comparison
 
 | Project and actual scope | Hardware evidence | Relevant files and value |
-|---|---|---|
+| --- | --- | --- |
 | lghub-linux: Rust HID++ CLI | README reports wired G102/G203 LIGHTSYNC c092 verified; 2202 and 1b04 explicitly unvalidated. | src/hid.rs, src/hidpp.rs, src/feature.rs, src/dpi.rs, src/features/{report_rate,rgb,onboard,keys}.rs, src/main.rs. Best compact G102-oriented Rust baseline. |
 | lowtech: Rust HID++ and probe scripts | PRO X SUPERLIGHT 2 format-7 profile empirically dumped, not G102. | src/hidpp.rs, src/onboard.rs, tools/onboard_dump.py. Strong format gate/safety pattern; offsets not transferable. GPL. |
 | OpenGHub: Rust backend + Svelte app | Registry is display metadata, not proof; some claims are model-scoped (G502 LIGHTSPEED). | src-tauri/src/hidpp/{mod.rs,features.rs,registry.rs,onboard.rs}, src-tauri/src/lightsync.rs. Typed capabilities. |
@@ -51,14 +51,14 @@ Comparison: lghub uses hidapi read/write and serialized request loop; logi-ghub-
 CPG local docs do not establish every requested feature payload. Do not invent layouts or assign meaning to unknown bytes.
 
 | Feature | Source-established functions/layout | Status |
-|---|---|---|
+| --- | --- | --- |
 | 0x2201 DPI | lghub src/dpi.rs: fn 0 sensor count, 1 DPI list, 2 current/default, 3 set; DPI BE u16. OpenGHub agrees. | G102 sources choose it. Exact range, step, stage behavior and persistence unknown. |
 | 0x2202 Extended DPI | lghub src/features/dpi_2202.rs labels IDs experimental/unvalidated. | Distinct codec; no G102 evidence. |
 | 0x8060 Report rate | lghub src/features/report_rate.rs: fn 0 bitmap list (bit N means N+1 ms), fn 1 current ms, fn 2 set ms. 1ms=1000Hz, 2=500, 4=250, 8=125. | G102 sources use it. G102 app says profile mode may reject change and host-mode switch can persist; read-only verify first. |
 | 0x8061 Extended rate | OpenGHub features defines capability/get/set fns 0/1/2 and separate indexed rates. | Not an 8060 alias; no G102 evidence. |
 | 0x8070 Color LED | CPG catalogue; G102 app describes fn 0 info, 1 zone, 2 effect, 3 set fallback. | App calls it less-tested. |
 | 0x8071 RGB | lghub src/features/rgb.rs: fn 00 query device/cluster/effect; 10 set cluster; 20 multi-LED; 30 NV; 40 LED bin; 50 software control; later sync/power. Query args [cluster,effect,TOI], replies include counts/location/persistency/effect ID/caps/period. Set uses long payload: cluster, slot, 10 effect bytes, suffix. | G102 projects use it; enumerate clusters/effects. Control prelude conflicts between projects. |
-| 0x8100 Profiles | lghub onboard.rs: fn 00 descriptor; 10 set mode; 20 get; 30 select profile; 40 current; 50 memory read; 60/70/80 write; b0/c0 DPI stage. Descriptor gives model/format IDs and geometry. | Feature presence is not schema. G102 format unknown; no writes. |
+| 0x8100 Profiles | lghub onboard.rs: fn 00 descriptor; 10 set mode; 20 get; 30 select profile; 40 current; 50 memory read; 60/70/80 write; b0/c0 DPI stage. Descriptor gives model/format IDs and geometry. | Feature presence is not schema. The later supplied G102 backup establishes a scoped format-4 descriptor/geometry; write behavior remains unverified and gated. |
 | 0x8110 Button Spy/Filter | OpenGHub: fn 0 count, 1 start, 2 stop, 3 get remap, 4 set; CPG labels Mouse Button Filter. | Host/software diversion, not persistent remapping; G102 unverified. |
 | 0x1b04 Reprogrammable controls | CPG generation 5; lghub keys.rs: count/info/get/set reporting fns 0..3; set long. | lghub marks unvalidated; G102 unknown, distinct from profile flash. |
 
@@ -67,7 +67,7 @@ CPG local docs do not establish every requested feature payload. Do not invent l
 PID names conflict: g203-led maps c084 Prodigy/c092 G203 LIGHTSYNC; G102-control maps c084 Prodigy, c092 G102/G203, c093 G102, c09d G203; lghub calls c092 G102/G203 tested; OpenGHub registry calls c090 G203 and c092 G102. Treat registry names as metadata, not capability evidence.
 
 | PID | References say | Evidence |
-|---|---|---|
+| --- | --- | --- |
 | 046d:c084 | G203 Prodigy | g203-led and G102 app; older device, don't infer RGB features. |
 | 046d:c092 | G203 LIGHTSYNC, G102/G203, or G102 LIGHTSYNC | conflicting naming; lghub reports tested PID, exact revision ambiguous. |
 | 046d:c090 | G203 LIGHTSYNC | OpenGHub registry only here. |
@@ -90,6 +90,7 @@ Tentative interpretations only: stored rate byte's units and relation to live 0x
 ### Phase 6 onboard button remapping preparation (2026-11-09)
 
 Phase 6 investigated the G102 format-4 button table in detail:
+
 1. **Button action offsets and stored ordering**:
    - The G102 descriptor explicitly declares 6 profile buttons (`info.button_count = 6`).
    - The button table starts at offset `0x20` (32 decimal) in profile sector 1, spanning 24 bytes (`0x20..0x38`) with 4 bytes per slot:
@@ -122,7 +123,7 @@ Phase 6 investigated the G102 format-4 button table in detail:
    - The original backup container must never be overwritten.
    - No writes to mouse hardware are implemented.
 
-Persistent remapping is structurally feasible in principle because the descriptor and current directory identify profile storage and six action records are present. Safe action semantics, physical button mapping and a G102 writer transaction have not been validated, so no profile writer exists. 0x8110 remains separate host/software remapping. The local G102/G203 `g203-led` direct USB control-transfer protocol is not used as HID++ evidence. OpenLogi is G502-specific; OMM-derived layout claims are reverse-engineered cross-model references, corroborated here only where noted.
+The descriptor, current directory and six action records establish a scoped offline profile interpretation for the supplied backup. They do not validate physical button behavior or flash writes. A scripted writer implementation exists but is hard-disabled in the CLI and public API pending exact model/firmware validation. 0x8110 remains separate host/software remapping. The local G102/G203 `g203-led` direct USB control-transfer protocol is not used as HID++ evidence. OpenLogi is G502-specific; OMM-derived layout claims are reverse-engineered cross-model references, corroborated here only where noted.
 
 Reference scope: local G102/G203 app documents only mode get/set (and warns mode changes persist), not profile-sector format. OpenLogi's 0x8100 directory/profile logic is explicitly checked on G502 LIGHTSPEED. `mouse-protocol` format layouts/checksums are reverse-engineered from OMM and their captures are specific to other Logitech models. These references alone do not verify G102 layout or CRC; the supplied G102 backup independently validates the checksum and corroborates selected format-4/base-v1 fields as described above.
 
@@ -158,14 +159,14 @@ lowtech src/onboard.rs reports format 7 on PRO X SUPERLIGHT 2: button table offs
 
 logi-ghub-linux tests/docs show safer transactions for its own devices: full backup, CRC validation, reject invalid/ROM sectors, start/data/end, readback and restore. actions.py describes 4-byte mouse/keyboard/consumer/special/macro/disabled/unassigned action records. G915X docs use a different bank/file layout and CRC32. Button order, G-Shift, macros, DPI and rate storage vary.
 
-CRC-16/CCITT-FALSE (poly 0x1021, init 0xffff) appears in tested mouse formats but isn't universal. Verify checksum coverage and storage order per format. G102 format, sector geometry, offsets, button encoding and checksum are unknown. No writes are safe now. Future writes require exact model+firmware, recognized format, valid original checksum, full backup, preservation of unknown bytes, verified encoding/checksum, complete transaction, readback equality and restoration plan. Never probe-write unknown or active profile.
+CRC-16/CCITT-FALSE (poly 0x1021, init 0xffff) appears in tested mouse formats but isn't universal. Verify checksum coverage and storage order per format. The supplied backup validates selected G102 format-4 data, but the final transfer byte, commit behavior and firmware scope remain unknown. No physical writes are safe now. Future writes require exact model+firmware, recognized format, valid original checksum, full backup, preservation of unknown bytes, verified encoding/checksum, complete transaction, readback equality and restoration plan. Never probe-write unknown or active profile.
 
 ### Profile-format comparison recovered in mouse-protocol
 
 The following is a format map from mouse-protocol/docs/logitech-onboard-profiles.md, recovered from Logitech OMM native registration code. The author distinguishes that reverse-engineered layout from hardware validation. IDs 7 and 8 are numeric cases absent from the older managed enum; labels for them are inferred. **None of these layouts is established for G102.**
 
 | Reported numeric format | Component composition per recovered dispatcher | Structural distinctions | Evidence caveat |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | 1 | Base v1 | Scalar DPI table; report rate at 0x00; button table 0x20..0x5f; G-Shift table 0x60..0x9f; name 0xa0..0xcf. | Layout recovered from vendor code. |
 | 2–3 | Base v1 + x8070 lighting | Same base-v1 button/G-Shift/name regions plus legacy lighting components. | Exact applicability to G102 unknown. |
 | 4 | Base v1 + x8070 + extras | Still base-v1 button/G-Shift offsets. A real PRO X Wireless report is separately documented as format 4, 16 sectors of 255 bytes, CRC-valid, with scalar DPI and 1ms report-rate byte. | One different model's sector was hardware-observed; not G102. |
@@ -192,7 +193,7 @@ Reusable: packet codec, Root discovery, response/error matching, serialized endp
 
 ## Wallust
 
-Codeberg direct fetch was blocked here. Current docs.rs Wallust 3.5.1 README describes templates (Jinja-like or pywal syntax) and generated terminal palettes/cache, but no stable JSON schema for this app. Verify variable names against installed Wallust docs before shipping a template. Reference: https://docs.rs/crate/wallust/latest/source/README.md
+Codeberg direct fetch was blocked here. Current docs.rs Wallust 3.5.1 README describes templates (Jinja-like or pywal syntax) and generated terminal palettes/cache, but no stable JSON schema for this app. Verify variable names against installed Wallust docs before shipping a template. Reference: <https://docs.rs/crate/wallust/latest/source/README.md>
 
 Application owns generic JSON contract; Wallust renders it, with no runtime dependency:
 
@@ -236,18 +237,16 @@ Without hardware: verify Wallust variables/version, inspect Linux permissions, d
 - Receiver/direct HID raw discovery: references/logi-ghub-linux/src/logi_ghub/hidpp/transport.py:1-105. G203 README transport distinction: references/g203-led/README.md:1-39.
 - HID++ 0x8100 sector write sequence (start, write chunks, end): references/lowtech/src/onboard.rs:65-80, references/Solaar/lib/logitech_receiver/hidpp20.py:610-630, and references/logi-ghub-linux/src/logi_ghub/features/onboard.py:120-145.
 
-## HID++ 0x8100 write protocol & safety findings (Phase 7)
+## HID++ 0x8100 write protocol & safety findings (Phase 7 audit / Phase 8 hardening)
 
-Reference analysis of `lowtech`, `Solaar`, and `logi-ghub-linux` confirms the HID++ 0x8100 write protocol structure:
+Cross-model references (`lowtech`, Solaar, and `logi-ghub-linux`) support a common transaction shape: `FN_START_WRITE = 6`, one or more 16-byte `FN_WRITE_DATA = 7` reports, then `FN_END_WRITE = 8`. This is reference-derived shape, not hardware-tested G102 write behavior. The supplied backup supports a 255-byte G102 sector length and checksum validation; it contains no evidence about the write wire protocol.
 
-1. **Transaction sequence**:
-   - `FN_START_WRITE = 6`: Parameters `[sector_high, sector_low, 0, 0, length_high, length_low]` (6 bytes). For a G102 format-4 profile (sector 1, 255 bytes): `[0x00, 0x01, 0x00, 0x00, 0x00, 0xff]`. Opens the device RAM write buffer for the specified sector.
-   - `FN_WRITE_DATA = 7`: Transfers data in 16-byte chunks. For a 255-byte sector, exactly 16 chunk packets are sent. Chunks 0..14 are 16 bytes each. Chunk 15 contains the final 15 bytes padded with a trailing zero byte to 16 bytes.
-   - `FN_END_WRITE = 8`: Empty parameter list (`&[]`). Commits the RAM write buffer to onboard flash memory.
-2. **Safety barriers**:
-   - Exact descriptor matching: Memory model 1, format 4, macro format 1, 6 buttons, 255 bytes/sector. Reject any other layout.
-   - Pre-write verified backup: A complete fresh raw backup is exported to disk and re-read/verified against live mouse state before any write transaction commences.
-   - Profile sector isolation: Writes are strictly restricted to profile sector 1. Directory (sector 0) and erased sectors (sector 2+) are never modified.
-   - Explicit confirmation requirement: `--confirm-write` is strictly required before any physical write command is executed; `--dry-run` provides offline simulation and byte-diff preview.
-   - Post-write readback verification: Sector 1 is read back over HID++ `FN_MEMORY_READ = 5`, compared byte-for-byte against the intended sector, CRC16-CCITT validated, and format-4 profile decoded to verify the new button mapping.
+The host implementation has been mock-tested with a 255-byte request length, sixteen 16-byte data reports, and an empty end-write request. The 16th data report necessarily includes a 256th transfer slot after the sector's final 15 bytes. No available G102 evidence establishes whether that extra byte is ignored, consumed, or required to be a particular value. Reference implementations and older docs disagree about padding conventions, and reference behavior is not a G102 specification. Therefore Phase 8 removes any implicit `0x00`/`0xff` default and refuses a non-aligned transfer before `FN_START_WRITE` unless a caller explicitly supplies a tail byte. Explicit configuration is not hardware validation.
 
+`FN_END_WRITE` uses an operation-specific 2,000 ms policy default, configurable through `WriteOptions`. That duration is conservative host policy only; no G102 worst-case commit latency is measured. Any error after the commit request is attempted—including timeout, transport disconnect, malformed response, or HID++ device error—is classified as `PotentiallyCommitted` because the G102 firmware's commit/error semantics are unknown. The client never retries; commit ambiguity requires read-only export and comparison before any further recovery decision. A reply returned after the request deadline is rejected, though the transport interface does not timestamp the device's exact on-wire arrival time.
+
+Transaction states are `Uncommitted` (no commit request attempted), `PotentiallyCommitted` (commit outcome unknown), `Committed` (acknowledged but not yet verified), and `Verified` (readback checks passed). Scripted tests model both an applied commit with a lost acknowledgement and disconnect after the commit request; they prove only host/mock behavior.
+
+Physical profile writes are disabled in public write APIs and CLI until exact G102 model/firmware validation is documented. The former `--confirm-write` check did not satisfy that evidence gate and no longer enables mutation. Read-only inspection/export and offline backup operations remain separate. No Phase 8 key-remapping feature was added.
+
+Hardware-dependent uncertainties still open: (1) acceptance/meaning of the 256th transfer byte; (2) maximum `FN_END_WRITE` latency; (3) whether a matched device error can follow a partial or completed flash commit; (4) whether volatile staging is discarded on endpoint disconnect, USB removal, or power cycle; and (5) exact PID/revision, firmware, and connection mode to which any future finding applies. No physical writes were conducted during Phase 8. These questions require target-specific captures/validation and must not be resolved by assumption.

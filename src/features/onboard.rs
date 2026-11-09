@@ -1003,12 +1003,12 @@ pub fn save_backup_file(
     backup: &RawBackup,
     input_path: Option<&str>,
 ) -> Result<(), FeatureError> {
-    if let Some(in_path) = input_path {
-        if std::path::Path::new(output_path) == std::path::Path::new(in_path) {
-            return Err(malformed(
-                "refusing to overwrite original backup file; specify a different output path",
-            ));
-        }
+    if let Some(in_path) = input_path
+        && std::path::Path::new(output_path) == std::path::Path::new(in_path)
+    {
+        return Err(malformed(
+            "refusing to overwrite original backup file; specify a different output path",
+        ));
     }
     let bytes = encode_backup(
         &backup.info,
@@ -1041,70 +1041,32 @@ pub fn read_writable_memory<T: HidTransport>(
     Ok(sectors)
 }
 
-/// Conservative default for `FN_END_WRITE` acknowledgement.
+/// Configurable policy default for `FN_END_WRITE` acknowledgement waiting.
 ///
-/// Flash-write latency on embedded MCUs typically falls in the 1–50 ms range
-/// for a single small sector, but the HID++ transport round-trip, host-side
-/// USB polling intervals, and any device-side erase step can add hundreds of
-/// milliseconds of additional delay. 2 000 ms is chosen to be safely above
-/// realistic commit times while remaining prompt enough to give a timely error.
-///
-/// **Hardware dependency (unverified):** The actual worst-case commit latency
-/// for the G102 LIGHTSYNC MCU and its 255-byte profile sector is unknown. If
-/// physical testing shows that `FN_END_WRITE` acknowledgements arrive close to
-/// or beyond 2 000 ms, this constant and `WriteOptions::commit_timeout` should
-/// be increased. Never decrease the timeout to accelerate failure detection
-/// because a false timeout triggers an `ambiguous_timeout` error — a condition
-/// that must never be followed by a retry.
+/// Two seconds is a conservative software default, not a measured G102 latency
+/// or protocol guarantee. The target's worst-case commit latency is unknown.
+/// Never automatically retry when this deadline expires.
 pub const DEFAULT_COMMIT_TIMEOUT: Duration = Duration::from_millis(2000);
 
-/// Padding byte appended to the final transfer chunk when the sector length is
-/// not an exact multiple of 16.
+/// No default is provided for the byte needed to fill a final partial 16-byte
+/// transfer. The G102's supplied backup establishes 255-byte sectors, but does
+/// not establish whether the transfer's 256th byte is ignored, consumed, or
+/// required to have a particular value. A caller must explicitly supply a
+/// value; doing so is not evidence that the value is G102-compatible.
 ///
-/// **Hardware dependency (unverified):** The G102 LIGHTSYNC has a 255-byte
-/// sector size, so every sector transfer produces one 15-byte final chunk that
-/// must be padded to 16 bytes for the HID++ long report. The correct value of
-/// the 16th byte is not established by hardware observation on this device.
-///
-/// Three plausible interpretations from reference analysis and protocol logic:
-///
-/// 1. **`0xff` (this default) — erased-flash value**: Zero-padding the slot
-///    is a common convention in Logitech reference code and matches the erased
-///    flash state. It is the least likely to corrupt adjacent data if the MCU
-///    happens to write that byte.
-///
-/// 2. **`0x00` — zero-fill**: An alternative convention used in some
-///    reference implementations. Unknown whether the G102 MCU ignores this
-///    extra byte entirely or writes it.
-///
-/// 3. **Any value is ignored**: If `FN_START_WRITE` correctly parameterises
-///    the sector length (here 255 bytes), a correctly implemented MCU staging
-///    buffer should stop consuming bytes at byte 255 and ignore the 256th.
-///    This has not been confirmed by hardware capture.
-///
-/// Until hardware captures from an actual G102 show that the padding byte is
-/// ignored or that a specific value is required, `0xff` is used as the safest
-/// choice. `WriteOptions::tail_padding_byte` allows the caller to override
-/// this if device-specific evidence is obtained.
-pub const SECTOR_TAIL_PADDING_BYTE: u8 = 0xff;
-
-/// Typed state of a write transaction at the moment an error is detected.
-///
-/// This enum allows callers and error messages to communicate clearly whether
-/// flash memory may have been modified, without ambiguity. Each variant maps
-/// to a distinct recovery posture.
+/// Typed state of a write transaction at the moment an error is detected or a
+/// report is returned. Each variant maps to a distinct recovery posture.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WriteTransactionState {
-    /// The transaction was rejected before or during data transfer.  No commit
-    /// (`FN_END_WRITE`) was sent.  The staging buffer in device RAM may be
-    /// partially written but flash was **not** modified.  Power-cycling or
-    /// reconnecting the mouse safely discards the uncommitted staging buffer.
+    /// No `FN_END_WRITE` request was sent. The host therefore has no requested
+    /// commit, but G102 staging/flash behavior and cleanup on disconnect or
+    /// power cycle are not hardware-validated.
     Uncommitted,
 
-    /// All data chunks were transferred and `FN_END_WRITE` was sent, but the
-    /// host did not receive an acknowledgement within the configured timeout.
-    /// The MCU may have committed the sector to flash without acknowledging, or
-    /// it may still be programming, or the response was lost in transit.
+    /// The `FN_END_WRITE` request was attempted but no trustworthy completion
+    /// result was obtained (timeout, disconnect, malformed response, or device
+    /// error). The MCU may have committed, may still be programming, or the
+    /// response may have been lost. The exact error semantics are unverified.
     ///
     /// **A retry is strictly forbidden.** Issuing another `FN_START_WRITE` /
     /// `FN_WRITE_DATA` / `FN_END_WRITE` sequence before the first commit has
@@ -1112,11 +1074,14 @@ pub enum WriteTransactionState {
     /// a partially-committed sector, or MCU-firmware undefined behaviour.
     PotentiallyCommitted,
 
-    /// `FN_END_WRITE` was acknowledged successfully.  Readback or checksum
-    /// verification subsequently failed.  Flash **has** been modified; its
-    /// current content may be corrupted or mismatched.  Restore from the
-    /// pre-write backup immediately.
+    /// `FN_END_WRITE` was acknowledged successfully, but readback verification
+    /// has not yet succeeded. The acknowledgement alone does not establish the
+    /// resulting sector contents.
     Committed,
+
+    /// The intended full sector was read back and passed byte-for-byte and
+    /// format-specific verification.
+    Verified,
 }
 
 impl fmt::Display for WriteTransactionState {
@@ -1125,16 +1090,17 @@ impl fmt::Display for WriteTransactionState {
             Self::Uncommitted => f.write_str("UNCOMMITTED"),
             Self::PotentiallyCommitted => f.write_str("POTENTIALLY COMMITTED"),
             Self::Committed => f.write_str("COMMITTED"),
+            Self::Verified => f.write_str("VERIFIED"),
         }
     }
 }
 
 /// Per-operation write configuration.
 ///
-/// The defaults are conservative: a 2 000 ms commit timeout and an `0xff`
-/// padding byte for the final incomplete chunk. See the documentation on
-/// [`DEFAULT_COMMIT_TIMEOUT`] and [`SECTOR_TAIL_PADDING_BYTE`] for the
-/// hardware-dependent uncertainties that remain unresolved.
+/// The defaults use a 2 000 ms commit timeout and no final-chunk byte. A
+/// non-aligned transfer therefore fails before `FN_START_WRITE` unless the
+/// caller explicitly supplies the unknown tail byte. See [`DEFAULT_COMMIT_TIMEOUT`]
+/// for the unresolved hardware-dependent timeout uncertainty.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WriteOptions {
     /// Timeout for the `FN_END_WRITE` acknowledgement.
@@ -1146,39 +1112,39 @@ pub struct WriteOptions {
     /// error and must never be followed by an automatic retry.
     pub commit_timeout: Duration,
 
-    /// Byte used to pad the final chunk when sector length % 16 != 0.
-    ///
-    /// For the G102 format-4 255-byte sector, chunk 15 (the last) contains
-    /// 15 bytes of real data and one padding byte. See [`SECTOR_TAIL_PADDING_BYTE`]
-    /// for the hardware-dependency note.
-    pub tail_padding_byte: u8,
+    /// Explicit byte for a final partial 16-byte chunk. `None` fails closed
+    /// before the write transaction starts if `data.len()` is not 16-byte
+    /// aligned. Any supplied byte is an unverified caller choice, not a
+    /// validated G102 protocol value.
+    pub tail_padding_byte: Option<u8>,
 }
 
 impl Default for WriteOptions {
     fn default() -> Self {
         Self {
             commit_timeout: DEFAULT_COMMIT_TIMEOUT,
-            tail_padding_byte: SECTOR_TAIL_PADDING_BYTE,
+            tail_padding_byte: None,
         }
     }
 }
 
 #[derive(Debug)]
 pub enum WriteProgressError {
+    PreflightRefused(FeatureError),
     StartWriteFailed(FeatureError),
     WriteChunkFailed {
         offset: usize,
         error: FeatureError,
     },
-    /// Commit failed.  When `state` is [`WriteTransactionState::PotentiallyCommitted`]
-    /// (i.e. `FN_END_WRITE` timed out), no retry or second write may be attempted.
+    /// The `FN_END_WRITE` request was attempted but its outcome was not
+    /// established. No retry or second write may be attempted.
     CommitFailed {
         error: FeatureError,
         /// Typed flash-state at the point of failure.  Callers must inspect this
         /// before deciding on any recovery action.
         state: WriteTransactionState,
-        /// Whether the failure was a timeout (always true when `state` is
-        /// `PotentiallyCommitted`).  Retained for structured matching.
+        /// Whether the reported failure was a timeout. All errors after the
+        /// commit request are potentially committed, not only timeouts.
         ambiguous_timeout: bool,
         timeout: Duration,
         backup_path: std::path::PathBuf,
@@ -1207,17 +1173,22 @@ pub enum WriteProgressError {
 impl fmt::Display for WriteProgressError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::PreflightRefused(e) => write!(
+                f,
+                "write preflight refused: {e}.\n\
+                 {}: No write request was sent and flash was not touched.",
+                WriteTransactionState::Uncommitted
+            ),
             Self::StartWriteFailed(e) => write!(
                 f,
                 "failed to initiate write window (FN_START_WRITE): {e}.\n\
-                 {}: Flash was not touched.",
+                 {}: No commit request was sent; device-side staging behavior is unverified.",
                 WriteTransactionState::Uncommitted
             ),
             Self::WriteChunkFailed { offset, error } => write!(
                 f,
                 "sector transfer failed at byte offset {offset} (FN_WRITE_DATA): {error}.\n\
-                 {}: Partial staging buffer remains in device volatile RAM; flash was NOT modified.\n\
-                 Power-cycling or reconnecting the mouse will discard this uncommitted staging buffer.",
+                 {}: No commit request was sent. Partial device-side staging and whether disconnect/power-cycle clears it are unverified; do not infer cleanup behavior.",
                 WriteTransactionState::Uncommitted
             ),
             Self::CommitFailed {
@@ -1227,39 +1198,31 @@ impl fmt::Display for WriteProgressError {
                 timeout,
                 backup_path,
             } => {
-                if *ambiguous_timeout {
-                    write!(
-                        f,
-                        "commit transaction timed out after {timeout:?} (FN_END_WRITE): {error}.\n\
-                         {state}: The mouse MCU may still be programming flash or may have committed without acknowledging.\n\
-                         CRITICAL: Automatic retries are strictly forbidden to prevent flash wear and corrupted writes.\n\
-                         RECOVERY INSTRUCTIONS:\n\
-                           1. Allow several seconds for any internal flash write to settle.\n\
-                           2. Run `g102-control onboard inspect` or `g102-control onboard info` to read back sector 1\n\
-                              and compare it with the pre-write backup.\n\
-                           3. If the sector matches the intended write, no restore is needed.\n\
-                           4. If sector 1 is missing, corrupted, or still shows old data, restore the verified\n\
-                              pre-write backup:\n\
-                                 g102-control onboard restore {} --confirm-write\n\
-                           5. Do NOT issue another write until device status is confirmed.",
-                        backup_path.display()
-                    )
-                } else {
-                    write!(
-                        f,
-                        "failed to commit sector write to flash (FN_END_WRITE): {error}.\n\
-                         {state}: Sector data was transferred to staging buffer but commit was rejected by device.\n\
-                         Inspect device with `g102-control onboard inspect`. Pre-write backup is preserved at `{}`.",
-                        backup_path.display()
-                    )
-                }
+                write!(
+                    f,
+                    "FN_END_WRITE outcome is unknown: {error}. {} Configured acknowledgement timeout was {timeout:?}.\n\
+                     {state}: The request may have reached the device; it may still be programming, may have committed without an acknowledgement, or the response/transport may have failed.\n\
+                     CRITICAL: Do not retry, restore, or issue any other write while commit status is unknown.\n\
+                     READ-ONLY RECOVERY: Allow the device to settle, reconnect if needed, then export current memory and compare it with the preserved pre-write backup:\n\
+                       g102-control onboard export after-commit.obk\n\
+                       g102-control onboard diff {} after-commit.obk\n\
+                     If the fresh export is unavailable or the difference is not fully understood, stop and preserve both files for manual recovery. Backup path: `{}`. Failure was a timeout: {}.",
+                    if *ambiguous_timeout {
+                        "No matching acknowledgement arrived before the deadline."
+                    } else {
+                        "A transport or device error occurred after the commit request was attempted."
+                    },
+                    backup_path.display(),
+                    backup_path.display(),
+                    ambiguous_timeout
+                )
             }
             Self::ReadBackFailed { error, backup_path } => write!(
                 f,
                 "sector was committed, but readback failed: {error}.\n\
-                 {}: Flash was updated but readback timed out or failed.\n\
-                 Inspect device with `g102-control onboard inspect`. Pre-write backup is preserved at `{}`.",
+                 {}: The commit was acknowledged, but contents are not verified. Run `g102-control onboard export after-write.obk`, then `g102-control onboard diff {} after-write.obk`. Do not write until the current sector is understood. Preserve the pre-write backup at `{}`.",
                 WriteTransactionState::Committed,
+                backup_path.display(),
                 backup_path.display()
             ),
             Self::ReadBackMismatch {
@@ -1271,8 +1234,7 @@ impl fmt::Display for WriteProgressError {
                 f,
                 "readback verification mismatch at byte offset {offset} (0x{offset:02x}): expected 0x{expected:02x}, read back 0x{actual:02x}.\n\
                  {}: Intended data does not match flash contents.\n\
-                 Restore pre-write backup immediately:\n\
-                 g102-control onboard restore {} --confirm-write",
+                 Run `g102-control onboard export after-write.obk`, then `g102-control onboard diff {} after-write.obk`. Do not issue another write until current memory is understood.",
                 WriteTransactionState::Committed,
                 backup_path.display()
             ),
@@ -1284,8 +1246,7 @@ impl fmt::Display for WriteProgressError {
                 f,
                 "readback sector checksum mismatch: stored CRC 0x{stored:04x}, calculated CRC 0x{calculated:04x}.\n\
                  {} (INTEGRITY COMPROMISED): Sector CRC validation failed.\n\
-                 Restore pre-write backup immediately:\n\
-                 g102-control onboard restore {} --confirm-write",
+                 Run `g102-control onboard export after-write.obk`, then `g102-control onboard diff {} after-write.obk`. Do not issue another write until current memory is understood.",
                 WriteTransactionState::Committed,
                 backup_path.display()
             ),
@@ -1296,8 +1257,7 @@ impl fmt::Display for WriteProgressError {
                 f,
                 "readback sector profile decode failed: {reason}.\n\
                  {} (PROFILE DECODE FAILURE): Sector buttons do not match expected assignments.\n\
-                 Restore pre-write backup:\n\
-                 g102-control onboard restore {} --confirm-write",
+                 Run `g102-control onboard export after-write.obk`, then `g102-control onboard diff {} after-write.obk`. Do not issue another write until current memory is understood.",
                 WriteTransactionState::Committed,
                 backup_path.display()
             ),
@@ -1306,6 +1266,22 @@ impl fmt::Display for WriteProgressError {
 }
 
 impl std::error::Error for WriteProgressError {}
+
+impl WriteProgressError {
+    /// State of the device write transaction represented by this failure.
+    pub fn transaction_state(&self) -> WriteTransactionState {
+        match self {
+            Self::PreflightRefused(_)
+            | Self::StartWriteFailed(_)
+            | Self::WriteChunkFailed { .. } => WriteTransactionState::Uncommitted,
+            Self::CommitFailed { state, .. } => *state,
+            Self::ReadBackFailed { .. }
+            | Self::ReadBackMismatch { .. }
+            | Self::ChecksumMismatch { .. }
+            | Self::DecodedProfileMismatch { .. } => WriteTransactionState::Committed,
+        }
+    }
+}
 
 #[derive(Debug)]
 pub enum WriteError {
@@ -1348,8 +1324,20 @@ impl From<WriteProgressError> for WriteError {
     }
 }
 
+/// Physical G102 profile writes remain disabled until model/firmware-specific
+/// write behavior, including the final transfer byte and commit semantics, is
+/// hardware-validated and documented.
+pub const PROFILE_WRITE_GATE_MESSAGE: &str = "physical onboard profile writes are disabled pending exact G102 model/firmware validation; --confirm-write cannot override this gate. Read-only export and dry-run remain available";
+
+fn profile_write_validation_available() -> bool {
+    // Deliberately hard-disabled. Change only after the hardware evidence gate
+    // in VALIDATION.md has been met and reviewed.
+    false
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WriteExecutionReport {
+    pub state: WriteTransactionState,
     pub backup_path: std::path::PathBuf,
     pub sector_written: u16,
     pub bytes_written: usize,
@@ -1361,6 +1349,7 @@ pub struct WriteExecutionReport {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RestoreExecutionReport {
+    pub state: WriteTransactionState,
     pub safety_backup_path: std::path::PathBuf,
     pub restore_file: std::path::PathBuf,
     pub sectors_written: Vec<u16>,
@@ -1381,7 +1370,7 @@ pub fn generate_unique_backup_path(prefix: &str) -> std::path::PathBuf {
     candidate
 }
 
-pub fn write_sector_with_tracking<T: HidTransport>(
+fn write_sector_with_tracking<T: HidTransport>(
     client: &mut HidppClient<T>,
     index: u8,
     sector: u16,
@@ -1393,12 +1382,22 @@ pub fn write_sector_with_tracking<T: HidTransport>(
     let opts = options.unwrap_or(&default_options);
 
     if data.is_empty() || data.len() > MAX_SECTOR_SIZE {
-        return Err(WriteProgressError::StartWriteFailed(malformed(
+        return Err(WriteProgressError::PreflightRefused(malformed(
             "sector data is empty or exceeds MAX_SECTOR_SIZE",
         )));
     }
+    if opts.commit_timeout.is_zero() {
+        return Err(WriteProgressError::PreflightRefused(malformed(
+            "FN_END_WRITE acknowledgement timeout must be greater than zero",
+        )));
+    }
+    if !data.len().is_multiple_of(READ_SIZE) && opts.tail_padding_byte.is_none() {
+        return Err(WriteProgressError::PreflightRefused(malformed(
+            "non-aligned sector transfer requires an explicit final-chunk byte; G102-compatible handling is unverified",
+        )));
+    }
     let length = u16::try_from(data.len()).map_err(|_| {
-        WriteProgressError::StartWriteFailed(malformed("sector length exceeds u16::MAX"))
+        WriteProgressError::PreflightRefused(malformed("sector length exceeds u16::MAX"))
     })?;
     let [sh, sl] = sector.to_be_bytes();
     let [lh, ll] = length.to_be_bytes();
@@ -1408,7 +1407,15 @@ pub fn write_sector_with_tracking<T: HidTransport>(
         .map_err(|e| WriteProgressError::StartWriteFailed(FeatureError::Client(e)))?;
 
     for (chunk_idx, chunk) in data.chunks(READ_SIZE).enumerate() {
-        let mut chunk_buf = [opts.tail_padding_byte; READ_SIZE];
+        let mut chunk_buf = [0; READ_SIZE];
+        if chunk.len() < READ_SIZE {
+            // The preflight above guarantees this option exists. The value is
+            // explicit caller policy, not a G102-validated protocol constant.
+            chunk_buf.fill(
+                opts.tail_padding_byte
+                    .expect("partial chunk was preflighted"),
+            );
+        }
         chunk_buf[..chunk.len()].copy_from_slice(chunk);
         if let Err(e) = client.request(index, FN_WRITE_DATA, &chunk_buf) {
             return Err(WriteProgressError::WriteChunkFailed {
@@ -1421,21 +1428,12 @@ pub fn write_sector_with_tracking<T: HidTransport>(
     let commit_res = client.request_with_timeout(index, FN_END_WRITE, &[], opts.commit_timeout);
     if let Err(e) = commit_res {
         let is_timeout = matches!(&e, ClientError::Protocol(ProtocolError::Timeout));
-        let state = if is_timeout {
-            WriteTransactionState::PotentiallyCommitted
-        } else {
-            // A device-error reply to FN_END_WRITE means the MCU explicitly
-            // rejected the commit. Flash was not modified.
-            // HARDWARE DEPENDENCY (unverified on G102): whether a device error
-            // on FN_END_WRITE truly guarantees no flash modification depends on
-            // the MCU firmware. We treat it as Uncommitted based on protocol
-            // semantics (error reply = command failed before execution), but this
-            // has not been confirmed by hardware capture.
-            WriteTransactionState::Uncommitted
-        };
         return Err(WriteProgressError::CommitFailed {
             error: FeatureError::Client(e),
-            state,
+            // Once the commit request path has been entered, timeout, transport
+            // loss, malformed replies, and device errors are all ambiguous
+            // until the exact firmware's commit semantics are established.
+            state: WriteTransactionState::PotentiallyCommitted,
             ambiguous_timeout: is_timeout,
             timeout: opts.commit_timeout,
             backup_path: backup_path
@@ -1448,6 +1446,29 @@ pub fn write_sector_with_tracking<T: HidTransport>(
 }
 
 pub fn execute_profile_button_remap<T: HidTransport>(
+    client: &mut HidppClient<T>,
+    feature_index: u8,
+    remaps: &[(usize, VerifiedAction)],
+    confirm_write: bool,
+    custom_backup_path: Option<&std::path::Path>,
+    options: Option<WriteOptions>,
+) -> Result<WriteExecutionReport, WriteError> {
+    if !profile_write_validation_available() {
+        return Err(WriteError::SafetyRefusal(
+            PROFILE_WRITE_GATE_MESSAGE.to_owned(),
+        ));
+    }
+    execute_profile_button_remap_after_gate(
+        client,
+        feature_index,
+        remaps,
+        confirm_write,
+        custom_backup_path,
+        options,
+    )
+}
+
+fn execute_profile_button_remap_after_gate<T: HidTransport>(
     client: &mut HidppClient<T>,
     feature_index: u8,
     remaps: &[(usize, VerifiedAction)],
@@ -1619,6 +1640,7 @@ pub fn execute_profile_button_remap<T: HidTransport>(
     }
 
     Ok(WriteExecutionReport {
+        state: WriteTransactionState::Verified,
         backup_path,
         sector_written: 1,
         bytes_written: target_sector_bytes.len(),
@@ -1630,6 +1652,29 @@ pub fn execute_profile_button_remap<T: HidTransport>(
 }
 
 pub fn execute_profile_restore<T: HidTransport>(
+    client: &mut HidppClient<T>,
+    feature_index: u8,
+    restore_backup_path: &std::path::Path,
+    confirm_write: bool,
+    custom_backup_path: Option<&std::path::Path>,
+    options: Option<WriteOptions>,
+) -> Result<RestoreExecutionReport, WriteError> {
+    if !profile_write_validation_available() {
+        return Err(WriteError::SafetyRefusal(
+            PROFILE_WRITE_GATE_MESSAGE.to_owned(),
+        ));
+    }
+    execute_profile_restore_after_gate(
+        client,
+        feature_index,
+        restore_backup_path,
+        confirm_write,
+        custom_backup_path,
+        options,
+    )
+}
+
+fn execute_profile_restore_after_gate<T: HidTransport>(
     client: &mut HidppClient<T>,
     feature_index: u8,
     restore_backup_path: &std::path::Path,
@@ -1792,6 +1837,7 @@ pub fn execute_profile_restore<T: HidTransport>(
     })?;
 
     Ok(RestoreExecutionReport {
+        state: WriteTransactionState::Verified,
         safety_backup_path,
         restore_file: restore_backup_path.to_path_buf(),
         sectors_written: vec![1],
@@ -1839,6 +1885,68 @@ mod tests {
             ]),
             writes: vec![],
         }
+    }
+
+    // The simulator tests choose 0xff only as an explicit fixture value to
+    // exercise packet sequencing. It is not asserted to be G102-compatible.
+    const SIMULATED_TAIL_BYTE: u8 = 0xff;
+
+    fn test_options(options: Option<WriteOptions>) -> WriteOptions {
+        let mut options = options.unwrap_or_default();
+        if options.tail_padding_byte.is_none() {
+            options.tail_padding_byte = Some(SIMULATED_TAIL_BYTE);
+        }
+        options
+    }
+
+    fn write_sector_with_tracking<T: HidTransport>(
+        client: &mut HidppClient<T>,
+        index: u8,
+        sector: u16,
+        data: &[u8],
+        options: Option<&WriteOptions>,
+        backup_path: Option<&std::path::Path>,
+    ) -> Result<(), WriteProgressError> {
+        let options = test_options(options.copied());
+        super::write_sector_with_tracking(client, index, sector, data, Some(&options), backup_path)
+    }
+
+    fn execute_profile_button_remap<T: HidTransport>(
+        client: &mut HidppClient<T>,
+        feature_index: u8,
+        remaps: &[(usize, VerifiedAction)],
+        confirm_write: bool,
+        custom_backup_path: Option<&std::path::Path>,
+        options: Option<WriteOptions>,
+    ) -> Result<WriteExecutionReport, WriteError> {
+        let options = test_options(options);
+        super::execute_profile_button_remap_after_gate(
+            client,
+            feature_index,
+            remaps,
+            confirm_write,
+            custom_backup_path,
+            Some(options),
+        )
+    }
+
+    fn execute_profile_restore<T: HidTransport>(
+        client: &mut HidppClient<T>,
+        feature_index: u8,
+        restore_backup_path: &std::path::Path,
+        confirm_write: bool,
+        custom_backup_path: Option<&std::path::Path>,
+        options: Option<WriteOptions>,
+    ) -> Result<RestoreExecutionReport, WriteError> {
+        let options = test_options(options);
+        super::execute_profile_restore_after_gate(
+            client,
+            feature_index,
+            restore_backup_path,
+            confirm_write,
+            custom_backup_path,
+            Some(options),
+        )
     }
 
     #[test]
@@ -2371,6 +2479,7 @@ mod tests {
         write_buffer: Vec<u8>,
         fail_at_fn: Option<u8>,
         timeout_at_fn: Option<u8>,
+        disconnect_at_fn: Option<u8>,
         delay_at_fn: Option<(u8, Duration)>,
         fail_at_chunk_offset: Option<usize>,
         disconnect_at_chunk_offset: Option<usize>,
@@ -2390,11 +2499,19 @@ mod tests {
                 write_buffer: Vec::new(),
                 fail_at_fn: None,
                 timeout_at_fn: None,
+                disconnect_at_fn: None,
                 delay_at_fn: None,
                 fail_at_chunk_offset: None,
                 disconnect_at_chunk_offset: None,
                 corrupt_readback_offset: None,
                 committed: false,
+            }
+        }
+
+        fn apply_pending_commit(&mut self) {
+            self.committed = true;
+            if self.sectors.len() > 1 && self.write_buffer.len() >= 255 {
+                self.sectors[1] = self.write_buffer[..255].to_vec();
             }
         }
     }
@@ -2409,41 +2526,56 @@ mod tests {
             let req_bytes = self.writes.last().ok_or("no write report")?;
             let req = Packet::decode(req_bytes).map_err(|e| e.to_string())?;
 
-            if let Some(to_fn) = self.timeout_at_fn {
-                if req.function_id == to_fn {
-                    return Ok(None);
+            if self.disconnect_at_fn == Some(req.function_id) {
+                if req.function_id == FN_END_WRITE {
+                    self.apply_pending_commit();
                 }
+                return Err("HID transport error: device disconnected".into());
             }
 
-            if let Some((del_fn, delay)) = self.delay_at_fn {
-                if req.function_id == del_fn && delay > timeout {
-                    return Ok(None);
+            if let Some(to_fn) = self.timeout_at_fn
+                && req.function_id == to_fn
+            {
+                // Model the ambiguous case: the device applies the commit,
+                // but the acknowledgement is lost or arrives too late.
+                if req.function_id == FN_END_WRITE {
+                    self.apply_pending_commit();
                 }
+                return Ok(None);
             }
 
-            if let Some(fail_fn) = self.fail_at_fn {
-                if req.function_id == fail_fn {
-                    // Build a correctly-formed HID++ 2.0 error response directly
-                    // as raw bytes, bypassing Packet::new whose function/sw encoding
-                    // is not compatible with the error-packet wire format.
-                    //
-                    // HID++ 2.0 error packet layout (20-byte long report):
-                    //   [0]  = 0x11 (long report ID)
-                    //   [1]  = device_index
-                    //   [2]  = 0xff (error marker)
-                    //   [3]  = feature_index from failed request
-                    //   [4]  = (function_id << 4) | software_id from failed request
-                    //   [5]  = error code (0x02 = invalid argument)
-                    //   [6..19] = 0x00
-                    let mut raw = vec![0u8; 20];
-                    raw[0] = 0x11; // long report
-                    raw[1] = req.device_index;
-                    raw[2] = 0xff; // error marker
-                    raw[3] = req.feature_index;
-                    raw[4] = (req.function_id << 4) | req.software_id;
-                    raw[5] = 0x02; // invalid argument
-                    return Ok(Some(raw));
+            if let Some((del_fn, delay)) = self.delay_at_fn
+                && req.function_id == del_fn
+            {
+                if delay > timeout {
+                    return Ok(None);
                 }
+                std::thread::sleep(delay);
+            }
+
+            if let Some(fail_fn) = self.fail_at_fn
+                && req.function_id == fail_fn
+            {
+                // Build a correctly-formed HID++ 2.0 error response directly
+                // as raw bytes, bypassing Packet::new whose function/sw encoding
+                // is not compatible with the error-packet wire format.
+                //
+                // HID++ 2.0 error packet layout (20-byte long report):
+                //   [0]  = 0x11 (long report ID)
+                //   [1]  = device_index
+                //   [2]  = 0xff (error marker)
+                //   [3]  = feature_index from failed request
+                //   [4]  = (function_id << 4) | software_id from failed request
+                //   [5]  = error code (0x02 = invalid argument)
+                //   [6..19] = 0x00
+                let mut raw = vec![0u8; 20];
+                raw[0] = 0x11; // long report
+                raw[1] = req.device_index;
+                raw[2] = 0xff; // error marker
+                raw[3] = req.feature_index;
+                raw[4] = (req.function_id << 4) | req.software_id;
+                raw[5] = 0x02; // invalid argument
+                return Ok(Some(raw));
             }
 
             match req.function_id {
@@ -2491,12 +2623,12 @@ mod tests {
                         let len = (sec_bytes.len().saturating_sub(offset)).min(16);
                         data[..len].copy_from_slice(&sec_bytes[offset..offset + len]);
                     }
-                    if self.committed {
-                        if let Some(corrupt_off) = self.corrupt_readback_offset {
-                            if sector == 1 && (offset..offset + 16).contains(&corrupt_off) {
-                                data[corrupt_off - offset] ^= 0xff;
-                            }
-                        }
+                    if self.committed
+                        && let Some(corrupt_off) = self.corrupt_readback_offset
+                        && sector == 1
+                        && (offset..offset + 16).contains(&corrupt_off)
+                    {
+                        data[corrupt_off - offset] ^= 0xff;
                     }
                     let reply = Packet::new(
                         ReportKind::Long,
@@ -2524,24 +2656,24 @@ mod tests {
                     Ok(Some(reply.encode()))
                 }
                 FN_WRITE_DATA => {
-                    if let Some(disc_offset) = self.disconnect_at_chunk_offset {
-                        if self.write_buffer.len() == disc_offset {
-                            return Err("HID transport error: device disconnected".into());
-                        }
+                    if let Some(disc_offset) = self.disconnect_at_chunk_offset
+                        && self.write_buffer.len() == disc_offset
+                    {
+                        return Err("HID transport error: device disconnected".into());
                     }
-                    if let Some(fail_offset) = self.fail_at_chunk_offset {
-                        if self.write_buffer.len() == fail_offset {
-                            // Build a correctly-formed HID++ 2.0 error response (see
-                            // fail_at_fn block above for the wire format explanation).
-                            let mut raw = vec![0u8; 20];
-                            raw[0] = 0x11;
-                            raw[1] = req.device_index;
-                            raw[2] = 0xff;
-                            raw[3] = req.feature_index;
-                            raw[4] = (req.function_id << 4) | req.software_id;
-                            raw[5] = 0x02; // invalid argument
-                            return Ok(Some(raw));
-                        }
+                    if let Some(fail_offset) = self.fail_at_chunk_offset
+                        && self.write_buffer.len() == fail_offset
+                    {
+                        // Build a correctly-formed HID++ 2.0 error response (see
+                        // fail_at_fn block above for the wire format explanation).
+                        let mut raw = vec![0u8; 20];
+                        raw[0] = 0x11;
+                        raw[1] = req.device_index;
+                        raw[2] = 0xff;
+                        raw[3] = req.feature_index;
+                        raw[4] = (req.function_id << 4) | req.software_id;
+                        raw[5] = 0x02; // invalid argument
+                        return Ok(Some(raw));
                     }
                     self.write_buffer.extend_from_slice(&req.params[..16]);
                     let reply = Packet::new(
@@ -2556,10 +2688,7 @@ mod tests {
                     Ok(Some(reply.encode()))
                 }
                 FN_END_WRITE => {
-                    self.committed = true;
-                    if self.sectors.len() > 1 && self.write_buffer.len() >= 255 {
-                        self.sectors[1] = self.write_buffer[..255].to_vec();
-                    }
+                    self.apply_pending_commit();
                     let reply = Packet::new(
                         ReportKind::Long,
                         req.device_index,
@@ -2603,7 +2732,7 @@ mod tests {
             if i < 15 {
                 assert_eq!(chunk_pkt.params[..16], test_sector[i * 16..(i + 1) * 16]);
             } else {
-                // Last chunk: 15 bytes of data + 1 byte padding (0xff)
+                // Mock fixture explicitly supplies 0xff; this is not G102 evidence.
                 assert_eq!(chunk_pkt.params[..15], test_sector[240..255]);
                 assert_eq!(chunk_pkt.params[15], 0xff);
             }
@@ -2664,6 +2793,7 @@ mod tests {
         assert!(matches!(
             err,
             WriteProgressError::CommitFailed {
+                state: WriteTransactionState::PotentiallyCommitted,
                 ambiguous_timeout: false,
                 ..
             }
@@ -2691,6 +2821,40 @@ mod tests {
     }
 
     #[test]
+    fn p8_public_write_apis_remain_disabled_even_with_confirmation() {
+        let backup = decode_backup(include_bytes!("../../g102-backup.obk")).unwrap();
+        let sim = SimulatedG102Device::new_from_backup(&backup);
+        let mut client = HidppClient::new(sim, 0xff, ReportKind::Long);
+
+        let remap_error = super::execute_profile_button_remap(
+            &mut client,
+            0x0f,
+            &[(4, VerifiedAction::RightClick)],
+            true,
+            None,
+            None,
+        )
+        .unwrap_err();
+        assert!(remap_error.to_string().contains(PROFILE_WRITE_GATE_MESSAGE));
+
+        let restore_error = super::execute_profile_restore(
+            &mut client,
+            0x0f,
+            std::path::Path::new("does-not-need-to-exist.obk"),
+            true,
+            None,
+            None,
+        )
+        .unwrap_err();
+        assert!(
+            restore_error
+                .to_string()
+                .contains(PROFILE_WRITE_GATE_MESSAGE)
+        );
+        assert!(client.into_transport().writes.is_empty());
+    }
+
+    #[test]
     fn test_execute_remap_successful_with_mock() {
         let backup = decode_backup(include_bytes!("../../g102-backup.obk")).unwrap();
         let sim = SimulatedG102Device::new_from_backup(&backup);
@@ -2711,6 +2875,7 @@ mod tests {
         .unwrap();
 
         assert!(report.readback_verified);
+        assert_eq!(report.state, WriteTransactionState::Verified);
         assert_eq!(report.sector_written, 1);
         assert_eq!(report.bytes_written, 255);
         assert_eq!(report.changes.len(), 1);
@@ -2869,6 +3034,7 @@ mod tests {
         .unwrap();
 
         assert!(report.readback_verified);
+        assert_eq!(report.state, WriteTransactionState::Verified);
         assert_eq!(report.sectors_written, vec![1]);
 
         // Safety backup of modified state was created
@@ -2883,7 +3049,7 @@ mod tests {
     }
 
     #[test]
-    fn test_final_chunk_pads_with_0xff() {
+    fn test_explicit_simulated_tail_byte_is_sent_verbatim() {
         let backup = decode_backup(include_bytes!("../../g102-backup.obk")).unwrap();
         let sim = SimulatedG102Device::new_from_backup(&backup);
         let mut client = HidppClient::new(sim, 0xff, ReportKind::Long);
@@ -2899,7 +3065,7 @@ mod tests {
         assert_eq!(chunk15.params.len(), 16);
         // Bytes 0..15 contain the last 15 bytes of sector data
         assert_eq!(&chunk15.params[..15], &test_sector[240..255]);
-        // Byte 15 is the 0xff padding byte
+        // Byte 15 is the caller-selected mock byte, not a protocol default.
         assert_eq!(chunk15.params[15], 0xff);
     }
 
@@ -2948,12 +3114,15 @@ mod tests {
         // Verify the formatted error message includes crucial recovery warnings
         let msg = err.to_string();
         assert!(msg.contains("POTENTIALLY COMMITTED"));
-        assert!(msg.contains("Automatic retries are strictly forbidden"));
-        assert!(msg.contains("RECOVERY INSTRUCTIONS:"));
+        assert!(msg.contains("Do not retry, restore, or issue any other write"));
+        assert!(msg.contains("READ-ONLY RECOVERY:"));
+        assert!(msg.contains("g102-control onboard export after-commit.obk"));
         assert!(msg.contains(&format!(
-            "g102-control onboard restore {}",
+            "g102-control onboard diff {} after-commit.obk",
             tmp_backup.display()
         )));
+        assert!(!msg.contains("onboard restore"));
+        assert!(client.into_transport().committed);
 
         let _ = std::fs::remove_file(&tmp_backup);
     }
@@ -2962,21 +3131,21 @@ mod tests {
     fn test_delayed_response_within_extended_timeout_succeeds() {
         let backup = decode_backup(include_bytes!("../../g102-backup.obk")).unwrap();
         let mut sim = SimulatedG102Device::new_from_backup(&backup);
-        // Simulate a flash commit delay of 1200ms
-        sim.delay_at_fn = Some((FN_END_WRITE, Duration::from_millis(1200)));
+        // Simulate an acknowledgement delayed but still within the deadline.
+        sim.delay_at_fn = Some((FN_END_WRITE, Duration::from_millis(12)));
         let mut client = HidppClient::new(sim, 0xff, ReportKind::Long);
 
-        // With default 2000ms commit timeout, this 1200ms latency succeeds
+        // With the default 2000ms commit timeout, this delayed acknowledgement succeeds.
         let test_sector = &backup.sectors[1].bytes;
         let res = write_sector_with_tracking(&mut client, 0x0f, 1, test_sector, None, None);
         assert!(res.is_ok());
 
-        // But with an insufficient 800ms commit timeout, it reports an ambiguous timeout
+        // A shorter operation-specific timeout reports an ambiguous outcome.
         let sim2 = SimulatedG102Device::new_from_backup(&backup);
         let mut client2 = HidppClient::new(sim2, 0xff, ReportKind::Long);
-        client2.transport_mut().delay_at_fn = Some((FN_END_WRITE, Duration::from_millis(1200)));
+        client2.transport_mut().delay_at_fn = Some((FN_END_WRITE, Duration::from_millis(12)));
         let tight_opts = WriteOptions {
-            commit_timeout: Duration::from_millis(800),
+            commit_timeout: Duration::from_millis(8),
             ..Default::default()
         };
         let res2 =
@@ -2987,7 +3156,7 @@ mod tests {
                 timeout,
                 ..
             }) => {
-                assert_eq!(timeout, Duration::from_millis(800));
+                assert_eq!(timeout, Duration::from_millis(8));
             }
             other => panic!("expected ambiguous timeout, got {:?}", other),
         }
@@ -3015,7 +3184,7 @@ mod tests {
 
         let msg = err.to_string();
         assert!(msg.contains("UNCOMMITTED"));
-        assert!(msg.contains("flash was NOT modified"));
+        assert!(msg.contains("No commit request was sent"));
 
         // Device transport should have only received 1 start + 2 chunks + 1 failed chunk (4 writes)
         // and crucially NEVER received FN_END_WRITE!
@@ -3033,7 +3202,7 @@ mod tests {
 
         let custom_opts = WriteOptions {
             commit_timeout: Duration::from_millis(3500),
-            tail_padding_byte: 0xaa,
+            tail_padding_byte: Some(0xaa),
         };
 
         write_sector_with_tracking(&mut client, 0x0f, 1, test_sector, Some(&custom_opts), None)
@@ -3060,17 +3229,9 @@ mod tests {
 
     // ── Phase 8: Protocol hardening tests ────────────────────────────────────
 
-    /// Verify that the final 15-byte chunk of a 255-byte sector is padded with
-    /// `SECTOR_TAIL_PADDING_BYTE` (0xff) by default, and that the data bytes
-    /// preceding the padding byte are exactly the last 15 bytes of the sector.
-    ///
-    /// **Hardware dependency note**: Whether the G102 MCU ignores or writes the
-    /// 16th byte of the final chunk is not established by hardware capture.  This
-    /// test proves only that the host sends 0xff as the padding byte.  The correct
-    /// value should be confirmed by a USB capture before physical writes are
-    /// attempted on a live device.
+    /// Unknown G102 final-byte behavior must fail before FN_START_WRITE.
     #[test]
-    fn p8_final_chunk_contains_correct_data_and_default_padding() {
+    fn p8_255_byte_sector_refuses_default_tail_before_start_write() {
         let backup = decode_backup(include_bytes!("../../g102-backup.obk")).unwrap();
         assert_eq!(
             backup.sectors[1].bytes.len(),
@@ -3081,28 +3242,60 @@ mod tests {
         let mut client = HidppClient::new(sim, 0xff, ReportKind::Long);
         let sector_bytes = &backup.sectors[1].bytes;
 
-        write_sector_with_tracking(&mut client, 0x0f, 1, sector_bytes, None, None).unwrap();
+        let error =
+            super::write_sector_with_tracking(&mut client, 0x0f, 1, sector_bytes, None, None)
+                .unwrap_err();
+        assert!(matches!(error, WriteProgressError::PreflightRefused(_)));
+        assert!(
+            error
+                .to_string()
+                .contains("G102-compatible handling is unverified")
+        );
         let transport = client.into_transport();
-
-        // 1 FN_START_WRITE + 16 FN_WRITE_DATA + 1 FN_END_WRITE
-        assert_eq!(transport.writes.len(), 18);
-
-        // The final chunk is at index 16 (0-based: start=0, chunks 1..=16, end=17)
-        let last_chunk_pkt = Packet::decode(&transport.writes[16]).unwrap();
-        assert_eq!(last_chunk_pkt.function_id, FN_WRITE_DATA);
-        assert_eq!(last_chunk_pkt.params.len(), 16);
-
-        // Bytes 0..15 must be the real sector data (sector bytes 240..255)
-        assert_eq!(
-            &last_chunk_pkt.params[..15],
-            &sector_bytes[240..255],
-            "first 15 bytes of last chunk must equal sector bytes 240..255"
+        assert!(
+            transport.writes.is_empty(),
+            "preflight must precede FN_START_WRITE"
         );
-        // Byte 15 is the padding byte — default is 0xff (erased-flash value)
-        assert_eq!(
-            last_chunk_pkt.params[15], SECTOR_TAIL_PADDING_BYTE,
-            "padding byte must equal SECTOR_TAIL_PADDING_BYTE (0xff)"
-        );
+    }
+
+    #[test]
+    fn p8_aligned_transfer_needs_no_final_byte_policy() {
+        let backup = decode_backup(include_bytes!("../../g102-backup.obk")).unwrap();
+        let sim = SimulatedG102Device::new_from_backup(&backup);
+        let mut client = HidppClient::new(sim, 0xff, ReportKind::Long);
+        let aligned = [0x5a; 32];
+
+        super::write_sector_with_tracking(&mut client, 0x0f, 1, &aligned, None, None).unwrap();
+        let transport = client.into_transport();
+        assert_eq!(transport.writes.len(), 4); // start, two chunks, end
+        for index in 1..=2 {
+            let packet = Packet::decode(&transport.writes[index]).unwrap();
+            assert_eq!(packet.function_id, FN_WRITE_DATA);
+            assert_eq!(packet.params, [0x5a; 16]);
+        }
+    }
+
+    #[test]
+    fn p8_zero_commit_timeout_refuses_before_write_window() {
+        let backup = decode_backup(include_bytes!("../../g102-backup.obk")).unwrap();
+        let sim = SimulatedG102Device::new_from_backup(&backup);
+        let mut client = HidppClient::new(sim, 0xff, ReportKind::Long);
+        let options = WriteOptions {
+            commit_timeout: Duration::ZERO,
+            tail_padding_byte: Some(0xff),
+        };
+
+        let error = super::write_sector_with_tracking(
+            &mut client,
+            0x0f,
+            1,
+            &backup.sectors[1].bytes,
+            Some(&options),
+            None,
+        )
+        .unwrap_err();
+        assert!(matches!(error, WriteProgressError::PreflightRefused(_)));
+        assert!(client.into_transport().writes.is_empty());
     }
 
     /// Confirm that a custom `tail_padding_byte` is used for the final chunk,
@@ -3116,7 +3309,7 @@ mod tests {
         let sector_bytes = &backup.sectors[1].bytes;
 
         let opts = WriteOptions {
-            tail_padding_byte: CUSTOM_PAD,
+            tail_padding_byte: Some(CUSTOM_PAD),
             ..Default::default()
         };
         write_sector_with_tracking(&mut client, 0x0f, 1, sector_bytes, Some(&opts), None).unwrap();
@@ -3183,7 +3376,7 @@ mod tests {
             msg.contains("UNCOMMITTED"),
             "WriteChunkFailed must report UNCOMMITTED state"
         );
-        assert!(msg.contains("flash was NOT modified"));
+        assert!(msg.contains("No commit request was sent"));
 
         // Critically: FN_END_WRITE must NEVER have been sent
         assert!(
@@ -3236,26 +3429,21 @@ mod tests {
 
         let msg = err.to_string();
         assert!(msg.contains("POTENTIALLY COMMITTED"));
-        assert!(msg.contains("Automatic retries are strictly forbidden"));
-        assert!(msg.contains("RECOVERY INSTRUCTIONS:"));
-        // Must include the backup path in the restore instruction
-        assert!(msg.contains("/tmp/p8_sentinel_backup.obk"));
-        // Must NOT suggest an automatic retry; only manual recovery
+        assert!(msg.contains("Do not retry, restore, or issue any other write"));
+        assert!(msg.contains("READ-ONLY RECOVERY:"));
+        assert!(msg.contains("g102-control onboard export after-commit.obk"));
         assert!(
-            !msg.contains("retry"),
-            "error message must not suggest retrying"
+            msg.contains("g102-control onboard diff /tmp/p8_sentinel_backup.obk after-commit.obk")
         );
+        assert!(msg.contains("/tmp/p8_sentinel_backup.obk"));
+        assert!(!msg.contains("onboard restore"));
+        assert!(client.into_transport().committed);
     }
 
-    /// Verify that a device error on `FN_END_WRITE` (not a timeout) yields
-    /// `WriteTransactionState::Uncommitted` and `ambiguous_timeout: false`.
-    ///
-    /// **Hardware dependency note**: Whether a device error reply to FN_END_WRITE
-    /// truly guarantees no flash modification is unconfirmed on the G102.  This
-    /// test asserts the protocol-level classification only; physical validation
-    /// would be required to confirm the MCU's behaviour on a rejected commit.
+    /// A matched device error after attempting `FN_END_WRITE` is potentially
+    /// committed because rejection semantics are not validated on G102.
     #[test]
-    fn p8_transaction_state_is_uncommitted_on_end_write_device_error() {
+    fn p8_transaction_state_is_potentially_committed_on_end_write_device_error() {
         let backup = decode_backup(include_bytes!("../../g102-backup.obk")).unwrap();
         let mut sim = SimulatedG102Device::new_from_backup(&backup);
         sim.fail_at_fn = Some(FN_END_WRITE);
@@ -3277,8 +3465,8 @@ mod tests {
                 );
                 assert_eq!(
                     *state,
-                    WriteTransactionState::Uncommitted,
-                    "a device error reply to FN_END_WRITE classifies as Uncommitted"
+                    WriteTransactionState::PotentiallyCommitted,
+                    "commit-error semantics are unverified, so conservatively ambiguous"
                 );
             }
             other => panic!("expected CommitFailed, got {:?}", other),
@@ -3288,6 +3476,56 @@ mod tests {
         assert!(
             !client.into_transport().committed,
             "device must not mark committed when FN_END_WRITE was rejected"
+        );
+    }
+
+    #[test]
+    fn p8_disconnect_after_commit_request_is_ambiguous_and_never_retried() {
+        let backup = decode_backup(include_bytes!("../../g102-backup.obk")).unwrap();
+        let mut sim = SimulatedG102Device::new_from_backup(&backup);
+        sim.disconnect_at_fn = Some(FN_END_WRITE);
+        let mut client = HidppClient::new(sim, 0xff, ReportKind::Long);
+
+        let error = write_sector_with_tracking(
+            &mut client,
+            0x0f,
+            1,
+            &backup.sectors[1].bytes,
+            None,
+            Some(std::path::Path::new("pre-write.obk")),
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.transaction_state(),
+            WriteTransactionState::PotentiallyCommitted
+        );
+        assert!(!matches!(
+            &error,
+            WriteProgressError::CommitFailed {
+                ambiguous_timeout: true,
+                ..
+            }
+        ));
+
+        let transport = client.into_transport();
+        assert!(transport.committed, "simulates commit before disconnect");
+        assert_eq!(
+            transport
+                .writes
+                .iter()
+                .filter(|packet| Packet::decode(packet)
+                    .is_ok_and(|packet| packet.function_id == FN_END_WRITE))
+                .count(),
+            1
+        );
+        assert_eq!(
+            transport
+                .writes
+                .iter()
+                .filter(|packet| Packet::decode(packet)
+                    .is_ok_and(|packet| packet.function_id == FN_START_WRITE))
+                .count(),
+            1
         );
     }
 
@@ -3448,10 +3686,14 @@ mod tests {
             msg.contains("COMMITTED"),
             "readback mismatch must report COMMITTED state; got: {msg}"
         );
-        assert!(
-            msg.contains("g102-control onboard restore"),
-            "readback failure must include restore command"
-        );
+        assert!(msg.contains("onboard export") && msg.contains("onboard diff"));
+        assert!(!msg.contains("onboard restore"));
+        if let WriteError::Progress(progress) = &err {
+            assert_eq!(
+                progress.transaction_state(),
+                WriteTransactionState::Committed
+            );
+        }
 
         let _ = std::fs::remove_file(&tmp);
     }
@@ -3464,10 +3706,10 @@ mod tests {
         let backup = decode_backup(include_bytes!("../../g102-backup.obk")).unwrap();
         let sector_bytes = &backup.sectors[1].bytes;
 
-        // 1. With a 2 000 ms timeout, a 500 ms delay succeeds
+        // 1. A response delayed within the 2 000 ms deadline succeeds.
         {
             let mut sim = SimulatedG102Device::new_from_backup(&backup);
-            sim.delay_at_fn = Some((FN_END_WRITE, Duration::from_millis(500)));
+            sim.delay_at_fn = Some((FN_END_WRITE, Duration::from_millis(50)));
             let mut client = HidppClient::new(sim, 0xff, ReportKind::Long);
             let opts = WriteOptions {
                 commit_timeout: Duration::from_millis(2000),
@@ -3477,17 +3719,17 @@ mod tests {
                 write_sector_with_tracking(&mut client, 0x0f, 1, sector_bytes, Some(&opts), None);
             assert!(
                 res.is_ok(),
-                "500 ms delay must succeed with 2 000 ms timeout"
+                "response within configured deadline must succeed"
             );
         }
 
-        // 2. With a 300 ms timeout, a 500 ms delay produces PotentiallyCommitted
+        // 2. A response delayed beyond the configured deadline is ambiguous.
         {
             let mut sim2 = SimulatedG102Device::new_from_backup(&backup);
-            sim2.delay_at_fn = Some((FN_END_WRITE, Duration::from_millis(500)));
+            sim2.delay_at_fn = Some((FN_END_WRITE, Duration::from_millis(50)));
             let mut client2 = HidppClient::new(sim2, 0xff, ReportKind::Long);
             let tight = WriteOptions {
-                commit_timeout: Duration::from_millis(300),
+                commit_timeout: Duration::from_millis(30),
                 ..Default::default()
             };
             let res2 =
@@ -3499,7 +3741,7 @@ mod tests {
                     timeout,
                     ..
                 }) => {
-                    assert_eq!(timeout, Duration::from_millis(300));
+                    assert_eq!(timeout, Duration::from_millis(30));
                 }
                 other => panic!("expected PotentiallyCommitted, got {:?}", other),
             }
@@ -3522,19 +3764,17 @@ mod tests {
         let msg = err.to_string();
 
         assert!(msg.contains("POTENTIALLY COMMITTED"));
-        assert!(msg.contains("Automatic retries are strictly forbidden"));
-        assert!(msg.contains("RECOVERY INSTRUCTIONS:"));
+        assert!(msg.contains("Do not retry, restore, or issue any other write"));
+        assert!(msg.contains("READ-ONLY RECOVERY:"));
+        assert!(msg.contains("2s"));
         assert!(msg.contains("/tmp/sentinel.obk"));
         // Must not contain misleading retry language
         assert!(
             !msg.to_lowercase().contains("try again"),
             "must not say 'try again'"
         );
-        assert!(
-            !msg.to_lowercase().contains("re-run the write"),
-            "must not say 're-run the write'"
-        );
-        assert!(!msg.contains("retry"), "must not contain 'retry'");
+        assert!(!msg.to_lowercase().contains("re-run the write"));
+        assert!(!msg.contains("onboard restore"));
     }
 
     /// Verify that the `WriteTransactionState` display strings match the
@@ -3550,6 +3790,7 @@ mod tests {
             "POTENTIALLY COMMITTED"
         );
         assert_eq!(WriteTransactionState::Committed.to_string(), "COMMITTED");
+        assert_eq!(WriteTransactionState::Verified.to_string(), "VERIFIED");
     }
 
     /// Verify that `WriteOptions::default()` uses the documented safe constants.
@@ -3560,13 +3801,6 @@ mod tests {
             opts.commit_timeout, DEFAULT_COMMIT_TIMEOUT,
             "default commit_timeout must equal DEFAULT_COMMIT_TIMEOUT"
         );
-        assert_eq!(
-            opts.tail_padding_byte, SECTOR_TAIL_PADDING_BYTE,
-            "default tail_padding_byte must equal SECTOR_TAIL_PADDING_BYTE"
-        );
-        assert_eq!(
-            opts.tail_padding_byte, 0xff,
-            "SECTOR_TAIL_PADDING_BYTE must be 0xff (erased-flash value)"
-        );
+        assert_eq!(opts.tail_padding_byte, None);
     }
 }

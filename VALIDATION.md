@@ -55,7 +55,6 @@ Phase 4 local hardware attempt was read-only and failed because `/dev/hidraw3` w
 
 Milestone passes only when software tests pass and hardware observations satisfy the milestone's acceptance criteria in PLAN.md. A README support entry or successful device enumeration alone is not proof. Update RESEARCH.md, unresolved questions, capability scope and test evidence whenever a hardware claim changes.
 
-
 ## Phase 5 offline profile decoder evidence
 
 `g102-backup.obk` is a 4203-byte `G102OBK1` v1 container: 27-byte header plus sixteen records (6-byte record header + 255-byte body). The descriptor identifies memory model 1, format 4, macro format 1, six buttons, and sixteen writable sectors. The active slot is 1 and its directory entry maps to sector 1. CRC-16/CCITT-FALSE matches programmed sectors 0 and 1 with stored values 0x587c and 0xb3d1. This validates only the supplied backup. The offline decoder interprets fields according to the recovered base-v1 schema, corroborated by these bytes; it does not establish physical button order or action behavior. Unknown bytes are retained. No onboard write or mode change is performed.
@@ -79,27 +78,18 @@ Button remapping preparation implements structured action representations, butto
 6. **No hardware writes**:
    All Phase 6 commands are offline only; no HID++ write packets or memory write transactions are executed.
 
-## Phase 7 safe onboard profile writing evidence
+## Phase 7 scripted onboard transaction coverage (not hardware evidence)
 
-Phase 7 implements physical onboard memory writing with defense-in-depth safety checks and verified mock transaction coverage:
+Phase 7 added a mockable 0x8100 transaction implementation. Its function IDs and simulated packets do not verify G102 flash-write behavior. No physical write was performed. In particular, the supplied 255-byte backup establishes sector length only; it does not establish how the device handles a 16-byte transfer containing the final 15 sector bytes plus a 256th byte. The previous “zero-padded” description was not evidence and is superseded by Phase 8's fail-closed policy.
 
-1. **HID++ 0x8100 write protocol verification**:
-   - `write_sector_with_tracking` sends `FN_START_WRITE = 6` with `[sector_h, sector_l, 0, 0, len_h, len_l]`, 16 chunks via `FN_WRITE_DATA = 7` (16 bytes each, zero-padded for the final 15-byte tail), and commits via `FN_END_WRITE = 8`.
-   - `test_write_sector_protocol_packets` verifies all 18 packets against exact expected byte payloads.
-2. **Failure injection testing**:
-   - `test_write_failure_injection_start_write`: Proves transaction aborts with `StartWriteFailed` if device rejects write window.
-   - `test_write_failure_injection_chunk`: Injects device error at 48th byte offset; verifies `WriteChunkFailed { offset: 48, .. }` is returned and commit `FN_END_WRITE` is NOT sent.
-   - `test_write_failure_injection_commit`: Verifies error reporting if flash commit fails.
-3. **Mandatory confirmation & dry-run gating**:
-   - `test_execute_remap_refuses_without_confirm_write` proves that calling write functions without `confirm_write: true` returns `SafetyRefusal` and sends zero HID reports.
-   - CLI commands `onboard set-button` and `onboard restore` enforce `--dry-run` or `--confirm-write` upfront before any HID communication.
-4. **Pre-write automatic backup & on-disk verification**:
-   - Before any flash transaction starts, a fresh raw backup is exported to disk (`g102_backup_<timestamp>.obk` or user-specified `--backup-file`).
-   - The backup is re-read from disk and parsed to verify integrity before any write packets are sent.
-   - `save_backup_file` and unique path generators refuse to overwrite existing files.
-5. **Readback byte-for-byte, checksum, and profile decode verification**:
-   - `test_execute_remap_successful_with_mock`: Full end-to-end simulated device write; verifies backup export, 18 write packets, readback of 255 bytes, byte-for-byte comparison, CRC16-CCITT check, and format-4 profile decode verification.
-   - `test_execute_remap_detects_readback_byte_mismatch`: Corrupts a button byte during readback and proves `ReadBackMismatch { offset: 0x2d, .. }` aborts the operation.
-   - `test_execute_remap_detects_readback_checksum_mismatch`: Corrupts checksum bytes during readback and proves `ReadBackMismatch { offset: 253, .. }` aborts the operation.
-   - `test_execute_restore_with_mock`: Full end-to-end restore from backup file, including safety backup export, sector write, readback verification, and profile restore.
+Scripted tests cover transaction packet construction, injected start/data/commit failures, backup serialization, sector-1 isolation, checksum validation, readback mismatch detection, and simulated restoration. These establish host behavior only. The simulator cannot prove firmware acceptance, flash effects, or restoration behavior on a G102.
 
+## Phase 8 flash-write protocol hardening (software-only)
+
+- Non-aligned writes, including the 255-byte G102 sector, are refused before `FN_START_WRITE` unless a caller explicitly supplies the final transfer byte. There is no default zero or `0xff`; an explicit value remains hardware-unverified. Aligned transfers need no tail-byte policy.
+- `FN_END_WRITE` has an operation-specific configurable acknowledgement timeout. The 2,000 ms default is a conservative software policy, not a measured G102 latency. CLI `--commit-timeout-ms` is retained for the API but cannot enable physical profile writes while the gate is closed.
+- Any timeout, disconnect, malformed response, or device error after attempting `FN_END_WRITE` is `PotentiallyCommitted` unless readback determines status. No retry or second write follows an ambiguous outcome. A delayed response returned after the request deadline is rejected by the client.
+- The state model distinguishes `Uncommitted`, `PotentiallyCommitted`, `Committed` (acknowledged, readback unverified), and `Verified`. Recovery instructions use read-only `onboard export` and `onboard diff`, and explicitly prohibit restore or another write while status is uncertain.
+- Public profile write APIs and CLI `onboard set-button` / `onboard restore` are disabled pending exact model/firmware validation; CLI refusal occurs before HID initialization. Dry-runs and read-only operations remain available. No key-remapping feature was added.
+
+Still hardware-dependent and unresolved: whether the final 256th transfer byte is ignored, consumed, or must have a particular value; worst-case `FN_END_WRITE` latency; whether a matched device error guarantees no commit; whether disconnect clears volatile staging; and which exact G102 USB PID, firmware, and connection mode share the observed read-only profile format. Do not infer these from the backup, mock, references, or marketing name. Resolve via recorded device-specific evidence before considering any physical mutation.

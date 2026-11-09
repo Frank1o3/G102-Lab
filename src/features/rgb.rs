@@ -216,7 +216,7 @@ fn encode_effect(
             return Err(FeatureError::UnsupportedRgbEffect {
                 index: effect_index,
                 id,
-            })
+            });
         }
     }
     Ok(effect_params)
@@ -329,10 +329,12 @@ mod tests {
         assert_eq!(setter[3] >> 4, SET_CLUSTER_EFFECT);
         assert_eq!(&setter[4..9], &[0, 0, 0x12, 0x34, 0x56]);
         assert_eq!(setter[16], VOLATILE);
-        assert!(transport
-            .writes
-            .iter()
-            .any(|report| report[3] >> 4 == MANAGE_SW_CONTROL && report[4..7] == [1, 3, 5]));
+        assert!(
+            transport
+                .writes
+                .iter()
+                .any(|report| report[3] >> 4 == MANAGE_SW_CONTROL && report[4..7] == [1, 3, 5])
+        );
     }
 
     #[test]

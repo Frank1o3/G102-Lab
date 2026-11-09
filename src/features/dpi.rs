@@ -263,9 +263,11 @@ mod tests {
     fn refuses_to_infer_support_from_short_truncated_list() {
         let mut c = HidppClient::new(
             Mock {
-                replies: vec![Packet::new(ReportKind::Short, 0xff, 7, 0, 0x0b, &[1])
-                    .unwrap()
-                    .encode()]
+                replies: vec![
+                    Packet::new(ReportKind::Short, 0xff, 7, 0, 0x0b, &[1])
+                        .unwrap()
+                        .encode(),
+                ]
                 .into(),
                 writes: vec![],
             },

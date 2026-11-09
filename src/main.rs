@@ -32,7 +32,9 @@ fn main() -> ExitCode {
 }
 
 fn print_help() {
-    println!("Usage:\n  g102-control inspect\n  g102-control dpi get [--device N] [--sensor N]\n  g102-control dpi set <DPI> [--device N] [--sensor N]\n  g102-control rate get|list [--device N]\n  g102-control rate set <HZ> [--device N]\n  g102-control rgb info|effects [--device N]\n  g102-control rgb set <CLUSTER> <EFFECT_INDEX> <RRGGBB> [--period-ms N] [--brightness 1..100] [--direction left|right] [--device N]\n  g102-control onboard info|profiles [--device N]\n  g102-control onboard export <FILE> [--device N]\n  g102-control onboard decode <FILE>\n  g102-control onboard buttons <FILE>\n  g102-control onboard remap <INPUT> [OUTPUT] --slot <1..6> --action <ACTION> [--dry-run]\n  g102-control onboard diff <FILE_A> <FILE_B>\n  g102-control onboard set-button <SLOT> <ACTION> [--confirm-write] [--dry-run] [--device N] [--backup-file FILE] [--commit-timeout-ms MS]\n  g102-control onboard restore <BACKUP_FILE> [--confirm-write] [--dry-run] [--device N] [--backup-file FILE] [--commit-timeout-ms MS]\n\nActions: left, right, middle, back, forward, dpi-cycle, disabled.\nUse rgb effects to see zero-based cluster/effect indexes. Effect IDs 0x00 Off, 0x01 Static, 0x03 Cycle, 0x04 Wave, and 0x0a Breathing have known G102 HID++ layouts. Period defaults to 3000ms (allowed 1000..8000), brightness defaults to 100, and direction defaults right. Color is six-digit hex (e.g. ffffff); cycle/wave ignore it. Writes claim 0x8071 software control and apply to volatile RAM only; no onboard mode or persistent memory is changed. `onboard buttons`, `onboard decode`, `onboard remap`, and `onboard diff` operate strictly on local G102OBK1 backups. `onboard set-button` and `onboard restore` safely modify physical mouse flash, requiring --confirm-write and exporting an automatic verified backup first.");
+    println!(
+        "Usage:\n  g102-control inspect\n  g102-control dpi get [--device N] [--sensor N]\n  g102-control dpi set <DPI> [--device N] [--sensor N]\n  g102-control rate get|list [--device N]\n  g102-control rate set <HZ> [--device N]\n  g102-control rgb info|effects [--device N]\n  g102-control rgb set <CLUSTER> <EFFECT_INDEX> <RRGGBB> [--period-ms N] [--brightness 1..100] [--direction left|right] [--device N]\n  g102-control onboard info|profiles [--device N]\n  g102-control onboard export <FILE> [--device N]\n  g102-control onboard decode <FILE>\n  g102-control onboard buttons <FILE>\n  g102-control onboard remap <INPUT> [OUTPUT] --slot <1..6> --action <ACTION> [--dry-run]\n  g102-control onboard diff <FILE_A> <FILE_B>\n  g102-control onboard set-button <SLOT> <ACTION> [--confirm-write] [--dry-run] [--device N] [--backup-file FILE] [--commit-timeout-ms MS]\n  g102-control onboard restore <BACKUP_FILE> [--confirm-write] [--dry-run] [--device N] [--backup-file FILE] [--commit-timeout-ms MS]\n\nActions: left, right, middle, back, forward, dpi-cycle, disabled.\nUse rgb effects to see zero-based cluster/effect indexes. Effect IDs 0x00 Off, 0x01 Static, 0x03 Cycle, 0x04 Wave, and 0x0a Breathing have known G102 HID++ layouts. Period defaults to 3000ms (allowed 1000..8000), brightness defaults to 100, and direction defaults right. Color is six-digit hex (e.g. ffffff); cycle/wave ignore it. Writes claim 0x8071 software control and apply to volatile RAM only; no onboard mode or persistent memory is changed. `onboard buttons`, `onboard decode`, `onboard remap`, and `onboard diff` operate strictly on local G102OBK1 backups. Physical `onboard set-button` and `onboard restore` writes are disabled pending exact G102 model/firmware validation; `--confirm-write` does not override this gate."
+    );
 }
 
 fn hid_api() -> Result<HidApi, String> {
@@ -101,7 +103,6 @@ fn command(args: &[String]) -> Result<(), String> {
     let mut remap_slot = None;
     let mut remap_action = None;
     let mut dry_run = false;
-    let mut confirm_write = false;
     let mut backup_file = None;
     let mut commit_timeout_ms = None;
     let mut i = 2;
@@ -110,9 +111,7 @@ fn command(args: &[String]) -> Result<(), String> {
             "--dry-run" => {
                 dry_run = true;
             }
-            "--confirm-write" => {
-                confirm_write = true;
-            }
+            "--confirm-write" => {}
             "--backup-file" => {
                 i += 1;
                 let value = args
@@ -122,9 +121,9 @@ fn command(args: &[String]) -> Result<(), String> {
             }
             "--commit-timeout-ms" => {
                 i += 1;
-                let value = args
-                    .get(i)
-                    .ok_or_else(|| "--commit-timeout-ms requires a millisecond duration".to_owned())?;
+                let value = args.get(i).ok_or_else(|| {
+                    "--commit-timeout-ms requires a millisecond duration".to_owned()
+                })?;
                 let ms: u64 = value
                     .parse()
                     .map_err(|_| format!("invalid --commit-timeout-ms value `{value}`"))?;
@@ -291,21 +290,15 @@ fn command(args: &[String]) -> Result<(), String> {
         let _ = action_str
             .parse::<onboard::VerifiedAction>()
             .map_err(|e| e.to_string())?;
-        if !dry_run && !confirm_write {
-            return Err(
-                "onboard set-button requires either --dry-run or --confirm-write. Physical flash will not be modified without explicit confirmation."
-                    .into(),
-            );
+        if !dry_run {
+            return Err(onboard::PROFILE_WRITE_GATE_MESSAGE.into());
         }
     } else if family == "onboard" && action == "restore" {
         if positional.len() != 1 {
             return Err("onboard restore requires exactly 1 argument: <BACKUP_FILE>".into());
         }
-        if !dry_run && !confirm_write {
-            return Err(
-                "onboard restore requires either --dry-run or --confirm-write. Physical flash will not be modified without explicit confirmation."
-                    .into(),
-            );
+        if !dry_run {
+            return Err(onboard::PROFILE_WRITE_GATE_MESSAGE.into());
         }
     } else {
         let expected_positional = if family == "rgb" && action == "set" {
@@ -345,7 +338,7 @@ fn command(args: &[String]) -> Result<(), String> {
             return Err(format!(
                 "{} candidates found; select one with --device N",
                 candidates.len()
-            ))
+            ));
         }
     };
     let connected = connect(&api, selected.clone())
@@ -427,12 +420,14 @@ fn command(args: &[String]) -> Result<(), String> {
                 id => {
                     return Err(format!(
                         "device effect 0x{id:04x} has no verified G102 setter layout"
-                    ))
+                    ));
                 }
             };
             rgb::set_effect(&mut client, feature.index, cluster, effect, settings)
                 .map_err(|e| e.to_string())?;
-            println!("Device acknowledged effect 0x{id:04x} for cluster {cluster}, effect index {effect} (volatile RAM). Read-back is not available; visible output and persistence are not verified.");
+            println!(
+                "Device acknowledged effect 0x{id:04x} for cluster {cluster}, effect index {effect} (volatile RAM). Read-back is not available; visible output and persistence are not verified."
+            );
         }
         ("onboard", "info" | "profiles") => {
             let info = onboard::inspect(&mut client, feature.index).map_err(|e| e.to_string())?;
@@ -447,7 +442,11 @@ fn command(args: &[String]) -> Result<(), String> {
                     .map_err(|e| e.to_string())?;
             std::fs::write(&positional[0], backup)
                 .map_err(|e| format!("could not write backup file `{}`: {e}", positional[0]))?;
-            println!("Exported {} raw writable sectors to {}. Format-specific decoding and checksum validity are not asserted.", sectors.len(), positional[0]);
+            println!(
+                "Exported {} raw writable sectors to {}. Format-specific decoding and checksum validity are not asserted.",
+                sectors.len(),
+                positional[0]
+            );
         }
         ("onboard", "set-button") => {
             let slot = remap_slot.unwrap();
@@ -455,10 +454,6 @@ fn command(args: &[String]) -> Result<(), String> {
             let verified_action = action_str
                 .parse::<onboard::VerifiedAction>()
                 .map_err(|e| e.to_string())?;
-
-            if !dry_run && !confirm_write {
-                return Err("onboard set-button requires either --dry-run or --confirm-write. Physical flash will not be modified without explicit confirmation.".into());
-            }
 
             if dry_run {
                 let info =
@@ -513,7 +508,7 @@ fn command(args: &[String]) -> Result<(), String> {
                 }
                 println!("All other sectors and profile fields remain unchanged.");
                 println!(
-                    "To apply this change to physical mouse flash, re-run with --confirm-write."
+                    "Physical profile writes remain disabled pending exact G102 model/firmware validation."
                 );
             } else {
                 let write_options = commit_timeout_ms.map(|ms| onboard::WriteOptions {
@@ -549,15 +544,13 @@ fn command(args: &[String]) -> Result<(), String> {
                     );
                 }
                 println!("New sector checksum: 0x{:04x}", report.new_checksum);
-                println!("Readback verification PASSED: byte-for-byte exact match, checksum match, and profile decode verified.");
+                println!(
+                    "Readback verification PASSED: byte-for-byte exact match, checksum match, and profile decode verified."
+                );
             }
         }
         ("onboard", "restore") => {
             let restore_path = std::path::Path::new(&positional[0]);
-            if !dry_run && !confirm_write {
-                return Err("onboard restore requires either --dry-run or --confirm-write. Physical flash will not be modified without explicit confirmation.".into());
-            }
-
             if dry_run {
                 let restore_bytes = std::fs::read(restore_path).map_err(|e| {
                     format!(
@@ -609,7 +602,7 @@ fn command(args: &[String]) -> Result<(), String> {
                     }
                 }
                 println!(
-                    "To apply this restore to physical mouse flash, re-run with --confirm-write."
+                    "Physical profile writes remain disabled pending exact G102 model/firmware validation."
                 );
             } else {
                 let write_options = commit_timeout_ms.map(|ms| onboard::WriteOptions {
@@ -633,7 +626,9 @@ fn command(args: &[String]) -> Result<(), String> {
                 );
                 println!("Restored from: {}", report.restore_file.display());
                 println!("Sector(s) written: {:?}", report.sectors_written);
-                println!("Readback verification PASSED: byte-for-byte exact match, checksum match, and profile decode verified.");
+                println!(
+                    "Readback verification PASSED: byte-for-byte exact match, checksum match, and profile decode verified."
+                );
             }
         }
         _ => unreachable!(),
@@ -652,7 +647,13 @@ fn print_onboard(info: &onboard::OnboardInspection, has_8110: bool, feature_vers
         "  User profiles: {}; factory profiles: {}; profile button count: {}",
         info.info.profile_count, info.info.factory_profile_count, info.info.button_count
     );
-    println!("  Writable sectors: {}; sector size: {} bytes; mechanical layout: 0x{:02x}; other info: 0x{:02x}", info.info.sector_count, info.info.sector_size, info.info.mechanical_layout, info.info.various_info);
+    println!(
+        "  Writable sectors: {}; sector size: {} bytes; mechanical layout: 0x{:02x}; other info: 0x{:02x}",
+        info.info.sector_count,
+        info.info.sector_size,
+        info.info.mechanical_layout,
+        info.info.various_info
+    );
     println!(
         "  Operating mode: {}",
         match info.mode {
@@ -680,7 +681,9 @@ fn print_onboard(info: &onboard::OnboardInspection, has_8110: bool, feature_vers
             checksum_label(sector.checksum_candidate)
         );
     }
-    println!("  This live inspection does not decode profile sectors; use `onboard export FILE` then `onboard decode FILE` for the evidence-scoped offline format-4 decoder.");
+    println!(
+        "  This live inspection does not decode profile sectors; use `onboard export FILE` then `onboard decode FILE` for the evidence-scoped offline format-4 decoder."
+    );
     println!(
         "  0x8110 software button filter: {} (separate from persistent profiles).",
         if has_8110 {
@@ -689,7 +692,9 @@ fn print_onboard(info: &onboard::OnboardInspection, has_8110: bool, feature_vers
             "not advertised"
         }
     );
-    println!("  Persistent button remapping appears structurally feasible through 0x8100 profile sectors, but action semantics and safe editing are unverified; no writer is implemented.");
+    println!(
+        "  Physical 0x8100 profile writes are disabled pending exact G102 model/firmware validation, including final-chunk and commit behavior."
+    );
 }
 
 fn print_decoded_backup(backup: &onboard::RawBackup) -> Result<(), String> {
@@ -699,7 +704,15 @@ fn print_decoded_backup(backup: &onboard::RawBackup) -> Result<(), String> {
         backup.sectors.len(),
         i.sector_size
     );
-    println!("  Descriptor: memory 0x{:02x}, profile format 0x{:02x}, macro format 0x{:02x}; {} buttons; {} user and {} factory profiles", i.memory_model, i.profile_format, i.macro_format, i.button_count, i.profile_count, i.factory_profile_count);
+    println!(
+        "  Descriptor: memory 0x{:02x}, profile format 0x{:02x}, macro format 0x{:02x}; {} buttons; {} user and {} factory profiles",
+        i.memory_model,
+        i.profile_format,
+        i.macro_format,
+        i.button_count,
+        i.profile_count,
+        i.factory_profile_count
+    );
     println!(
         "  Mode: {:?}; current-profile bytes: {:02x?}",
         backup.mode, backup.current_profile_raw
@@ -764,8 +777,14 @@ fn print_decoded_backup(backup: &onboard::RawBackup) -> Result<(), String> {
         "  Rate byte: 0x{:02x} (mapping tentative)",
         profile.report_rate_raw
     );
-    println!("  DPI stage indexes: default {}, shifted {}; values {:?} DPI (layout corroborated, semantics tentative)", profile.default_dpi_stage, profile.shifted_dpi_stage, profile.dpi_stages);
-    println!("  Color bytes: {:02x?}; power byte: 0x{:02x}; angle-snap byte: 0x{:02x} (state meanings unverified)", profile.color_raw, profile.power_raw, profile.angle_snap_raw);
+    println!(
+        "  DPI stage indexes: default {}, shifted {}; values {:?} DPI (layout corroborated, semantics tentative)",
+        profile.default_dpi_stage, profile.shifted_dpi_stage, profile.dpi_stages
+    );
+    println!(
+        "  Color bytes: {:02x?}; power byte: 0x{:02x}; angle-snap byte: 0x{:02x} (state meanings unverified)",
+        profile.color_raw, profile.power_raw, profile.angle_snap_raw
+    );
     println!("  Button actions by stored slot (physical button order is unverified):");
     for button in profile.buttons {
         println!(
@@ -775,8 +794,12 @@ fn print_decoded_backup(backup: &onboard::RawBackup) -> Result<(), String> {
             button.raw
         );
     }
-    println!("  CRC-16/CCITT-FALSE (poly 0x1021, init 0xffff, final two bytes big-endian) matches the programmed directory and profile sectors in this backup only.");
-    println!("  G-Shift, profile name, format-4 extras and all other undecoded bytes remain opaque in the raw backup.");
+    println!(
+        "  CRC-16/CCITT-FALSE (poly 0x1021, init 0xffff, final two bytes big-endian) matches the programmed directory and profile sectors in this backup only."
+    );
+    println!(
+        "  G-Shift, profile name, format-4 extras and all other undecoded bytes remain opaque in the raw backup."
+    );
     Ok(())
 }
 
@@ -843,12 +866,18 @@ fn print_button_table(backup: &onboard::RawBackup) -> Result<(), String> {
     }
     println!();
     println!("Evidence & Safety Constraints:");
-    println!("  - Stored slot ordering is sequential (slots 1..=6). Default assignments match standard physical");
-    println!("    buttons, but physical button mapping is unverified without behavioral tracing on hardware.");
+    println!(
+        "  - Stored slot ordering is sequential (slots 1..=6). Default assignments match standard physical"
+    );
+    println!(
+        "    buttons, but physical button mapping is unverified without behavioral tracing on hardware."
+    );
     println!(
         "  - Verified remappable targets: left, right, middle, back, forward, dpi-cycle, disable."
     );
-    println!("  - Unverified targets (keyboard key combos, consumer controls, macros, other special codes)");
+    println!(
+        "  - Unverified targets (keyboard key combos, consumer controls, macros, other special codes)"
+    );
     println!("    are rejected for editing to prevent corrupting onboard memory.");
     println!(
         "  - Profile sector CRC-16/CCITT-FALSE candidate: 0x{:04x} (valid).",
@@ -918,11 +947,15 @@ fn print_remap_plan(
         255 - plan.byte_diffs.len(),
         plan.profile_sector_id
     );
-    println!("    - All other 15 sectors (sector 0 directory, sectors 2..15 erased) and container headers remain untouched.");
+    println!(
+        "    - All other 15 sectors (sector 0 directory, sectors 2..15 erased) and container headers remain untouched."
+    );
     if dry_run {
         println!("  Dry-run only: no files were written and no mouse hardware was contacted.");
     } else if let Some(out) = output_path {
-        println!("  Saved modified backup container to `{out}`. Original `{input_path}` preserved untouched.");
+        println!(
+            "  Saved modified backup container to `{out}`. Original `{input_path}` preserved untouched."
+        );
     }
 }
 
@@ -963,7 +996,9 @@ fn print_backup_diff(path_a: &str, path_b: &str, diff: &onboard::BackupDiff) {
             .iter()
             .all(|d| (d.offset >= 0x20 && d.offset < 0x38) || d.offset >= 253);
         if only_button_and_crc {
-            println!("  Integrity check: differences strictly confined to button table and sector CRC. Unrelated profile data is unchanged.");
+            println!(
+                "  Integrity check: differences strictly confined to button table and sector CRC. Unrelated profile data is unchanged."
+            );
         }
     }
 }
@@ -984,8 +1019,12 @@ fn print_directory(name: &str, entries: &[onboard::DirectoryEntry]) {
 fn checksum_label(checksum: onboard::ChecksumCandidate) -> String {
     match checksum {
         onboard::ChecksumCandidate::Erased => "erased (all ff)".into(),
-        onboard::ChecksumCandidate::Crc16CcittFalseMatch(value) => format!("CRC-16/CCITT-FALSE candidate match 0x{value:04x}"),
-        onboard::ChecksumCandidate::Crc16CcittFalseMismatch { stored, calculated } => format!("CRC-16/CCITT-FALSE candidate mismatch (stored 0x{stored:04x}, calculated 0x{calculated:04x})"),
+        onboard::ChecksumCandidate::Crc16CcittFalseMatch(value) => {
+            format!("CRC-16/CCITT-FALSE candidate match 0x{value:04x}")
+        }
+        onboard::ChecksumCandidate::Crc16CcittFalseMismatch { stored, calculated } => format!(
+            "CRC-16/CCITT-FALSE candidate mismatch (stored 0x{stored:04x}, calculated 0x{calculated:04x})"
+        ),
     }
 }
 
@@ -1002,14 +1041,17 @@ fn parse_rgb(value: &str) -> Result<[u8; 3], String> {
 }
 
 fn print_rgb(info: rgb::LightingInfo) {
-    println!("HID++ 0x8071 lighting: {} cluster(s); device NV capabilities 0x{:04x}, extended 0x{:04x}. Persistence not established.", info.cluster_count, info.nv_capabilities, info.extended_capabilities);
+    println!(
+        "HID++ 0x8071 lighting: {} cluster(s); device NV capabilities 0x{:04x}, extended 0x{:04x}. Persistence not established.",
+        info.cluster_count, info.nv_capabilities, info.extended_capabilities
+    );
     println!(
         "  Software control flags 0x{:02x}; event flags 0x{:02x}",
         info.software_control.0, info.software_control.1
     );
     for cluster in info.clusters {
         println!(
-                "  Cluster {}: location {} (0x{:04x}); display persistence 0x{:02x}; effect persistence {}; multi-LED pattern {}",
+            "  Cluster {}: location {} (0x{:04x}); display persistence 0x{:02x}; effect persistence {}; multi-LED pattern {}",
             cluster.index,
             location_name(cluster.location),
             cluster.location,
@@ -1049,20 +1091,6 @@ fn effect_name(id: u16) -> &'static str {
         0x0004 => "Color wave",
         0x000a => "Breathing",
         _ => "Unknown effect",
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::effect_name;
-
-    #[test]
-    fn names_known_lightsync_effect_ids_and_leaves_unknown_ids_unassigned() {
-        assert_eq!(effect_name(0x0001), "Static color");
-        assert_eq!(effect_name(0x0003), "Color cycle");
-        assert_eq!(effect_name(0x0004), "Color wave");
-        assert_eq!(effect_name(0x000a), "Breathing");
-        assert_eq!(effect_name(0x000d), "Unknown effect");
     }
 }
 
@@ -1136,4 +1164,41 @@ fn print_inspection(device: &DeviceInspection) {
             .map(|f| format!("available at index 0x{:02x}, v{}", f.index, f.version))
             .unwrap_or_else(|| "not advertised".into())
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::effect_name;
+
+    #[test]
+    fn names_known_lightsync_effect_ids_and_leaves_unknown_ids_unassigned() {
+        assert_eq!(effect_name(0x0001), "Static color");
+        assert_eq!(effect_name(0x0003), "Color cycle");
+        assert_eq!(effect_name(0x0004), "Color wave");
+        assert_eq!(effect_name(0x000a), "Breathing");
+        assert_eq!(effect_name(0x000d), "Unknown effect");
+    }
+
+    #[test]
+    fn physical_profile_mutations_are_refused_before_hid_initialization() {
+        for args in [
+            vec![
+                "onboard".to_owned(),
+                "set-button".to_owned(),
+                "4".to_owned(),
+                "right".to_owned(),
+                "--confirm-write".to_owned(),
+            ],
+            vec![
+                "onboard".to_owned(),
+                "restore".to_owned(),
+                "missing.obk".to_owned(),
+                "--confirm-write".to_owned(),
+            ],
+        ] {
+            let error = super::command(&args).unwrap_err();
+            assert!(error.contains("disabled pending exact G102 model/firmware validation"));
+            assert!(error.contains("--confirm-write cannot override this gate"));
+        }
+    }
 }

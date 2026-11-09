@@ -258,6 +258,12 @@ impl<T: HidTransport> HidppClient<T> {
             else {
                 return Err(ProtocolError::Timeout.into());
             };
+            // Some transport backends may return a report after their
+            // requested timeout. Do not accept a matching acknowledgement that
+            // arrived after this request's deadline (especially for writes).
+            if Instant::now() > deadline {
+                return Err(ProtocolError::Timeout.into());
+            }
             let response = Packet::decode(&report)?;
             if response.device_index != self.device_index {
                 self.unmatched.push_back(response);
@@ -431,6 +437,22 @@ mod tests {
         }
     }
 
+    struct DelayedReplyTransport {
+        response: Vec<u8>,
+        delay: Duration,
+    }
+
+    impl HidTransport for DelayedReplyTransport {
+        fn write_report(&mut self, _report: &[u8]) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn read_report(&mut self, _timeout: Duration) -> Result<Option<Vec<u8>>, String> {
+            std::thread::sleep(self.delay);
+            Ok(Some(self.response.clone()))
+        }
+    }
+
     fn reply(feature_index: u8, function: u8, software_id: u8, params: &[u8]) -> Vec<u8> {
         Packet::new(
             ReportKind::Long,
@@ -495,6 +517,33 @@ mod tests {
         let response = client.request(0, 1, &[0, 0, 0x5a]).unwrap();
         assert_eq!(response.params[0..3], [4, 5, 0x5a]);
         assert_eq!(client.take_unmatched().len(), 1);
+    }
+
+    #[test]
+    fn request_accepts_delayed_matching_reply_before_deadline() {
+        let transport = DelayedReplyTransport {
+            response: reply(0, 1, SOFTWARE_ID, &[4, 5, 0x5a]),
+            delay: Duration::from_millis(10),
+        };
+        let mut client = HidppClient::new(transport, 0xff, ReportKind::Long);
+        let response = client
+            .request_with_timeout(0, 1, &[0, 0, 0x5a], Duration::from_millis(200))
+            .unwrap();
+        assert_eq!(response.params[..3], [4, 5, 0x5a]);
+    }
+
+    #[test]
+    fn request_rejects_matching_reply_returned_after_deadline() {
+        let transport = DelayedReplyTransport {
+            response: reply(0, 1, SOFTWARE_ID, &[4, 5, 0x5a]),
+            delay: Duration::from_millis(150),
+        };
+        let mut client = HidppClient::new(transport, 0xff, ReportKind::Long);
+        let result = client.request_with_timeout(0, 1, &[0, 0, 0x5a], Duration::from_millis(100));
+        assert!(matches!(
+            result,
+            Err(ClientError::Protocol(ProtocolError::Timeout))
+        ));
     }
 
     #[test]

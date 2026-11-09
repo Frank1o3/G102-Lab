@@ -45,9 +45,15 @@ impl fmt::Display for FeatureError {
         match self {
             Self::Client(error) => error.fmt(f),
             Self::Unsupported(id) => write!(f, "device does not advertise feature {id}"),
-            Self::InsufficientReportCapacity { feature, report_id } => write!(f, "report 0x{report_id:02x} cannot safely carry the supported-value response for feature {feature}"),
+            Self::InsufficientReportCapacity { feature, report_id } => write!(
+                f,
+                "report 0x{report_id:02x} cannot safely carry the supported-value response for feature {feature}"
+            ),
             Self::Malformed(reason) => write!(f, "malformed feature response: {reason}"),
-            Self::UnsupportedRgbEffect { index, id } => write!(f, "cluster effect index {index} is device effect 0x{id:04x}; only static color effect 0x0001 is enabled. Run `rgb effects` and select its static-color index"),
+            Self::UnsupportedRgbEffect { index, id } => write!(
+                f,
+                "cluster effect index {index} is device effect 0x{id:04x}; only static color effect 0x0001 is enabled. Run `rgb effects` and select its static-color index"
+            ),
             Self::InvalidSensor { requested, count } => write!(
                 f,
                 "sensor {requested} is outside the device-reported sensor count {count}"
