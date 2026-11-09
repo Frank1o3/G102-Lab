@@ -50,11 +50,9 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let result = if args.is_empty() {
+    let result = if args.is_empty() || (args[0] == "inspect" && args.len() == 1) {
         inspect()
-    } else if args[0] == "inspect" && args.len() == 1 {
-        inspect()
-    } else if args[0] == "inspect" {
+    } else if args.first().is_some_and(|arg| arg == "inspect") {
         Err("inspect accepts no command arguments; use `--help` for usage".into())
     } else {
         command(&args, &app_config)

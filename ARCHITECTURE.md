@@ -58,6 +58,8 @@ The current config schema validates preferred USB identity/interface, DPI sensor
 
 ### Background service and interface
 
+This is a future architecture proposal only; Phase 10 adds no background process or interface beyond the existing CLI.
+
 Device manager emits attach/detach/capability/state events. Coordinator applies desired settings only when device is present and owns needed control; no unprompted flash writes. Interface layer may later be CLI first, then daemon/UI. It communicates via typed commands and subscribes to events; it never accesses transport directly. Resource cleanup closes handles, cancels watchers, releases software RGB ownership when safe, and avoids changing persistent device mode implicitly.
 
 ## Data flow

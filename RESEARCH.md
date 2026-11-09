@@ -1,10 +1,10 @@
 # Engineering research
 
-Evidence is from checked-out references. “Verified” means a reference reports physical testing or includes a device trace; it was not repeated here. No device appeared in local lsusb -nn output. No hardware writes were issued.
+Evidence is from checked-out references. “Verified” means a reference reports physical testing or includes a device trace; it was not repeated here. The initial research snapshot did not list a device in `lsusb -nn`; later read-only sysfs/HIDAPI observations identified a `046d:c092` G102 LIGHTSYNC HID++ endpoint on interface 1. No physical setting or onboard-memory writes were issued.
 
 ## Workspace discovery
 
-Root: /home/franklin/Projects/G102-Lab, not a Git repository. No application Cargo project or root docs existed initially. Ten clean Git clones are in references/. No clone was modified. Commits are snapshot values.
+The current workspace root is the `G102-Lab` Git repository, containing the native Rust application and project documentation. The `references/` directory holds research snapshots; those trees are not part of the application package and were not modified. The repository and Cargo project were added after the initial research-only workspace snapshot.
 
 | Directory | Upstream | Branch / commit | Language | License |
 | --- | --- | --- | --- | --- |
@@ -201,7 +201,7 @@ Studying protocol facts differs from copying code/comments/tests. MIT requires n
 
 Licenses: lghub MIT; lowtech GPL-2.0-or-later; OpenGHub MIT; OpenLogi MIT OR Apache-2.0; g203-led MIT; G102 app MIT (PySide6 LGPLv3); Solaar GPL-2.0-or-later; logi-ghub-linux GPL-2.0-or-later; cpg-docs unspecified; mouse-protocol AGPL-3.0.
 
-Minimal stack: hidapi or direct hidraw behind trait. hidapi simplifies access but native/report-ID behavior needs validation; hidraw needs sysfs/descriptor and permission handling. Narrow udev rules; no root. One synchronous worker per endpoint initially; async optional later. serde/serde_json for config/palette. A filesystem watcher is optimization; stable reread/validation is correctness. Structured errors and logging; don't log serials/raw memory by default. No premature GUI. No Piper/libratbag runtime dependencies.
+Minimal stack: hidapi or direct hidraw behind trait. hidapi simplifies access but native/report-ID behavior needs validation; hidraw needs sysfs/descriptor and permission handling. Narrow udev rules; no root. One synchronous worker per endpoint initially; async optional later. Phase 10 uses serde/TOML for config and Python standard-library JSON parsing in the optional adapter; no watcher/coordinator is shipped. Structured errors and logging; don't log serials/raw memory by default. No premature GUI. No Piper/libratbag runtime dependencies.
 
 ## Open questions
 

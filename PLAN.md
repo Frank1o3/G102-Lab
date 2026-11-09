@@ -124,21 +124,21 @@ Acceptance: no write to unknown format; original checksum valid; backup recovera
 
 Tests: format fixtures, byte-preservation property tests, checksum tests, mocked write failures at each phase, physical sacrificial/non-active profile test and restoration.
 
-## Milestone 8 — Palette interface and Wallust adapter
+## Milestone 8 — Palette interface and Wallust adapter (original watcher design deferred)
 
-Tasks: generic provider, JSON schema/version, stable file watcher, color mapping, manual overrides and write diff.
+Phase 10 implements only the standalone explicit Wallust-to-static-RGB adapter and app-owned JSON schema. The original generic provider, stable file watcher, manual overrides, and desired-state diff remain deferred.
 
 Dependency: RGB service; Wallust template variables confirmed for supported version.
 
-Outcome: wallpaper palette sync without hard Wallust dependency.
+Outcome: one user-invoked palette update without a linked Wallust dependency; no background sync.
 
 Acceptance: repeated/partial/atomic updates safe; last valid state retained; unchanged values do not produce device writes; missing Wallust graceful.
 
-Tests: parser/event burst/partial-write/manual precedence/device offline tests; hardware only after RGB milestone.
+Tests: adapter fixtures and fake CLI are present. Event bursts, partial-write observation, manual precedence, and offline device retention apply only if a watcher is designed later; hardware validation remains required for visual RGB behavior.
 
-## Milestone 9 — Background monitoring and interface
+## Milestone 9 — Background monitoring and interface (deferred; out of Phase 10)
 
-Tasks: reconnect service, multiple-device selection, structured CLI; then decide whether GUI/daemon is warranted.
+No background service, daemon, GUI, or frontend was started. This roadmap entry is not a Phase 10 completion criterion.
 
 Dependency: stable library APIs.
 

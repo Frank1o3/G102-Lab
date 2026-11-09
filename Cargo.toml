@@ -3,7 +3,7 @@
     edition="2024"
     license="MIT"
     name="g102-control"
-    rust-version="1.85"
+    rust-version="1.88"
     version="0.1.0"
 
 [dependencies]

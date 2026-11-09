@@ -15,9 +15,9 @@ Validation separates deterministic software tests from tests requiring the actua
 - CRC known vectors and captured-sector validation for each explicitly supported format. No generic assumption that CRC-16 applies everywhere.
 - Button action fixtures for each known 4-byte action plus unknown byte preservation; G-Shift/macro only if supported codec exists.
 - Writer simulations with failure at pre-read, backup, start, each data chunk, end, readback and checksum; assert no blind retries and backup remains available.
-- Palette JSON valid/malformed/schema version/RGB parsing, duplicate hash, debounce bursts, atomic rename, partial write, file changed mid-read, missing file, last-good retention and manual override precedence.
+- Phase 10 Wallust adapter: palette schema/color validation, missing/malformed inputs, reported static-slot validation, explicit fake-CLI invocation, and disabled/incomplete config behavior. Watcher/debounce/atomic-update/last-good/manual-override tests are deferred because no watcher or coordinator is shipped.
 - Reconnection and two-device mock tests ensure no stale feature indexes or response cross-talk.
-- Configuration version/migration/range tests and logging privacy checks.
+- Configuration version/range/unknown-key/CLI-precedence tests. Automatic config migration and logging privacy behavior are not implemented in Phase 10.
 
 ## Actual G102 read-only validation
 
@@ -108,9 +108,10 @@ Physical `onboard set-button` and `onboard restore` remain disabled in both the 
 
 Software-only checks added:
 
+- Final Rust checks passed: `cargo fmt --all`, `cargo clippy --locked --all-targets --all-features -- -D warnings`, and `cargo test --locked` (79 library + 6 CLI tests). The Wallust adapter suite passed 5 Python standard-library tests.
 - Rust config tests cover defaults, explicit missing files, version/range/unknown-key validation, RGB triplet parsing, and conflicting config flags. CLI tests cover global config options, numeric CLI override over config defaults, preferred device identity, explicit `--device` override, and the onboard write refusal.
 - Python standard-library tests use temporary JSON/TOML files and a fake CLI to verify valid palette invocation, malformed/missing/invalid colors, refusal of non-static/unreported effects, enabled config defaults, and disabled integration behavior.
-- `makepkg --cleanbuild --nodeps` built the release package and ran its Rust/Python tests on CachyOS. The archive was inspected: binaries/helper are mode 0755; docs, sample config, template, license, and udev rule are mode 0644. `ldd` shows libudev as the required non-glibc runtime library (`systemd-libs`).
+- `makepkg --noconfirm --cleanbuild --nodeps --force` built the release package and ran its Rust/Python tests on CachyOS. The archive was inspected: binaries/helper are mode 0755; docs, sample config, template, license, and udev rule are mode 0644. `ldd` shows libudev as the required non-glibc runtime library (`systemd-libs`).
 - The release binary was invoked from `/tmp`; `--version` worked and invalid command/config inputs returned nonzero before HID access.
 
 System/hardware checks still pending:

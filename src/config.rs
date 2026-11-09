@@ -42,20 +42,11 @@ pub struct DeviceConfig {
     pub interface_number: Option<i32>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct DpiConfig {
     pub sensor: u8,
     pub value: Option<u16>,
-}
-
-impl Default for DpiConfig {
-    fn default() -> Self {
-        Self {
-            sensor: 0,
-            value: None,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -235,18 +226,6 @@ pub fn default_config_path() -> Option<PathBuf> {
             .join("g102-control")
             .join(CONFIG_FILE_NAME)
     })
-}
-
-pub fn expand_home(path: &str) -> PathBuf {
-    if path == "~" {
-        return env::var_os("HOME").map_or_else(|| PathBuf::from(path), PathBuf::from);
-    }
-    if let Some(relative) = path.strip_prefix("~/") {
-        if let Some(home) = env::var_os("HOME") {
-            return Path::new(&home).join(relative);
-        }
-    }
-    PathBuf::from(path)
 }
 
 pub fn validate_color(value: &str) -> Result<[u8; 3], String> {

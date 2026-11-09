@@ -84,7 +84,7 @@ Wallust supports user-defined templates and documented color variables (`color0`
 
 ## Build and development
 
-Rust 1.85+ is required (edition 2024). The lockfile pins dependency versions; use `--locked` for reproducible dependency resolution. On Arch/CachyOS install `base-devel`, Rust/Cargo, `pkgconf`, `systemd-libs`, and Python for integration tests. Then run:
+Rust 1.88+ is required (edition 2024 and standard-library APIs used by the current implementation). The lockfile pins dependency versions; use `--locked` for reproducible dependency resolution. On Arch/CachyOS install `base-devel`, Rust/Cargo, `pkgconf`, `systemd-libs`, and Python for integration tests. Then run:
 
 ```text
 cargo fmt --all -- --check
