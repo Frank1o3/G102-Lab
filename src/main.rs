@@ -1374,7 +1374,7 @@ fn print_inspection(device: &DeviceInspection) {
 
 #[cfg(test)]
 mod tests {
-    use super::{effect_name, extract_global_options, resolve_u16, select_candidate};
+    use super::{effect_name, extract_global_options, resolve_u8, resolve_u16, select_candidate};
     use g102_control::{HidppDeviceInfo, config::AppConfig};
 
     #[test]
@@ -1442,6 +1442,11 @@ mod tests {
         );
         assert_eq!(resolve_u16(None, Some(1600), "DPI", 1, 8000).unwrap(), 1600);
         assert!(resolve_u16(Some(&"0".into()), Some(1600), "DPI", 1, 8000).is_err());
+        assert_eq!(
+            resolve_u8(Some(&"2".into()), Some(1), "effect index", 63).unwrap(),
+            2
+        );
+        assert_eq!(resolve_u8(None, Some(1), "effect index", 63).unwrap(), 1);
     }
 
     #[test]

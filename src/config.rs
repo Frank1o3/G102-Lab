@@ -156,6 +156,12 @@ impl AppConfig {
         if self.device.vendor_id.is_some() != self.device.product_id.is_some() {
             return Err("preferred device requires both `vendor_id` and `product_id`".into());
         }
+        if self.device.interface_number.is_some() && self.device.vendor_id.is_none() {
+            return Err(
+                "preferred device `interface_number` requires both `vendor_id` and `product_id`"
+                    .into(),
+            );
+        }
         if self
             .device
             .interface_number
@@ -321,6 +327,12 @@ mod tests {
             AppConfig::load(Some(&path), false)
                 .unwrap_err()
                 .contains("unknown field")
+        );
+        fs::write(&path, "version = 1\n[device]\ninterface_number = 1\n").unwrap();
+        assert!(
+            AppConfig::load(Some(&path), false)
+                .unwrap_err()
+                .contains("interface_number` requires")
         );
         fs::remove_file(path).unwrap();
     }
