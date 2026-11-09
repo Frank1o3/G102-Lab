@@ -191,20 +191,9 @@ Reusable: packet codec, Root discovery, response/error matching, serialized endp
 
 ## Wallust
 
-Codeberg direct fetch was blocked here. Current docs.rs Wallust 3.5.1 README describes templates (Jinja-like or pywal syntax) and generated terminal palettes/cache, but no stable JSON schema for this app. Verify variable names against installed Wallust docs before shipping a template. Reference: <https://docs.rs/crate/wallust/latest/source/README.md>
+Official Wallust documentation was fetched on 2026-11-09: template variables include `color0`–`color15`, `background`, `foreground`, and `cursor`; default colors render as `#RRGGBB`. Templates use MiniJinja-style `{{ variable }}` syntax. Named template config uses `[templates]` entries with `template`/`target`; `target` may expand `~`. Hooks are TOML shell commands run through `/bin/sh`, so they are arbitrary command execution and remain user opt-in. Relevant pages: <https://explosion-mental.codeberg.page/wallust/templates/variables.html>, <https://explosion-mental.codeberg.page/wallust/templates/syntax.html>, <https://explosion-mental.codeberg.page/wallust/config/template.html>, <https://explosion-mental.codeberg.page/wallust/config/example.html>, and <https://explosion-mental.codeberg.page/wallust/hooks.html>.
 
-Application owns generic JSON contract; Wallust renders it, with no runtime dependency:
-
-    {
-      "schema": "org.g102-control.palette/v1",
-      "source": "wallust",
-      "generated_at": "2026-11-08T12:00:00Z",
-      "colors": {"background":"#1e1e2e","foreground":"#cdd6f4",
-                 "accent":"#89b4fa","secondary":"#f38ba8"},
-      "palette": ["#1e1e2e","#cdd6f4","#89b4fa","#f38ba8"]
-    }
-
-Require schema and at least one #RRGGBB color; reject malformed/alpha. Explicitly map semantic colors to three zones. Watch parent dir for atomic rename, debounce duplicates, reread whole file, detect partial/changing reads, parse temporary state and swap only on success. Retain last valid values on errors; hash to skip duplicates. Missing producer is inactive sync. Manual zone overrides take precedence until sync resumes. Compare against last confirmed device colors and send only changes. Make provider generic for other generators.
+Phase 10 implements `integrations/wallust/g102-control-palette.json.j2` and the standard-library `scripts/g102-control-wallust` adapter. The app-owned JSON schema is `org.g102-control.palette/v1`; the template maps Wallust `background`/`foreground` and `color4`/`color5` to semantic fields. The adapter validates the selected `#RRGGBB` color and requires the configured cluster/effect slot to be reported as Static color (effect ID 0x0001) before invoking the existing RGB CLI. It does not choose a zone or effect index for the user, watch files, or call 0x8100. Its test suite uses sample palette files and a fake CLI. Verify syntax against the Wallust release actually installed; the app neither pins nor installs Wallust.
 
 ## License and stack
 

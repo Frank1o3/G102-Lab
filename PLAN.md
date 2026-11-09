@@ -30,7 +30,7 @@ Hardware-dependent uncertainties remain: whether the 256th transferred byte is i
 
 RGB reporting distinguishes software-control requests, device-reported persistence capability fields, reference-described setter parameters, actual display/effect persistence, and separate 0x8100 onboard flash. Button labels identify corroborated encodings only; action behavior and physical slot mapping remain unverified. Unknown effect IDs remain read-only, and unsupported action encodings remain rejected.
 
-Mock/offline tests cover non-empty restore previews, modified-profile restoration and CRC validation, malformed/checksum-invalid backups, unsupported restore sectors, original-backup preservation, and unrelated-byte/sector isolation. The CLI help and diagnostics were reviewed against actual command behavior. Physical write gates remain unchanged. No daemon, GUI, frontend, new remapping capability, or Phase 10 work was added.
+Mock/offline tests cover non-empty restore previews, modified-profile restoration and CRC validation, malformed/checksum-invalid backups, unsupported restore sectors, original-backup preservation, and unrelated-byte/sector isolation. The CLI help and diagnostics were reviewed against actual command behavior. Physical write gates remain unchanged. No daemon, GUI, frontend, or new remapping capability was added.
 
 ## Milestone 0 — Documentation and evidence baseline
 

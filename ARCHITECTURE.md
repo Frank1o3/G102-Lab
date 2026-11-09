@@ -50,9 +50,11 @@ Split command protocol from format codec. Memory transport supplies descriptor, 
 
 ### Palette integration and configuration
 
-Palette provider trait exposes latest validated palette plus change/error events. Initial provider watches a JSON file; Wallust is an external template producer, not a linked dependency. Coordinator maps configured semantic color names to enumerated lighting zones. Manual overrides have precedence. Content hashes and last-confirmed hardware state suppress duplicate writes. Missing file or Wallust does not stop device control.
+**Phase 10 shipped behavior:** user configuration is optional versioned TOML at the XDG config path; the CLI applies defaults < config < explicitly supplied CLI values only after a setter command is run. Loading config, startup, and inspection never apply settings. Wallust is an external template producer; its template writes the app-owned versioned JSON palette. The standalone adapter validates the selected RGB color, checks that the configured cluster/effect slot is currently reported as Static color, and invokes the existing RGB CLI only when explicitly run. There is no file watcher, daemon, or automatically installed hook. See `src/config.rs`, `scripts/g102-control-wallust`, and `docs/WALLUST.md`.
 
-Configuration is versioned TOML or JSON; initial product can choose TOML for user config while palette contract stays JSON. Keep device identity selector, behavior opt-ins, palette path/mapping, manual overrides, log level and polling interval. Validate on load; reject invalid RGB/feature values and retain defaults only for optional fields. Raw profile backups live separately and never get silently rewritten by config migrations.
+**Future architecture only:** a generic PaletteProvider, directory watcher, manual zone override coordinator, and automatic reconnect/application flow are not implemented in Phase 10 and must not be inferred from this release. Any future automatic application requires a separate explicit opt-in and hardware validation.
+
+The current config schema validates preferred USB identity/interface, DPI sensor/value, polling rate, RGB defaults, and optional Wallust palette path/color/target settings. Config is never created or rewritten automatically; raw profile backups remain separate.
 
 ### Background service and interface
 

@@ -65,9 +65,9 @@ Phase 8 hardening status: the existing 255-byte sector transaction has no defaul
 
 ## Palette schema/configuration
 
-JSON root schema version org.g102-control.palette/v1 with source, generated_at, semantic colors and optional ordered palette, as shown in RESEARCH.md. Color parser validates RGB triplets. Generic PaletteProvider returns a validated immutable snapshot plus change/error notification. File provider watches parent directory, debounces, rereads stable bytes, validates whole JSON and swaps atomically. Keep last good snapshot.
+**Phase 10 implementation:** `src/config.rs` provides optional version-1 TOML and performs validation without HID access or automatic writes. `scripts/g102-control-wallust` reads the `org.g102-control.palette/v1` JSON produced by the Wallust template in `integrations/wallust/`; it validates one semantic color and checks the requested slot against `rgb effects` output before invoking `g102-control rgb set`. `source` is emitted by the template; `generated_at` is optional and is not required by the adapter. Palette paths are user-configured because Wallust has no project-specific default path. No watcher, last-good cache, debounce, file monitoring, or automatic application is implemented.
 
-App config schema version should include selected device policy, optional palette file, semantic-color-to-zone mapping, brightness/fallback policy, manual per-zone overrides and log level. Values are validated on load. Manual overrides have documented precedence; resume sync clears/ignores overrides. Do not store raw profile data in user config.
+The implemented config has preferred USB VID/PID/interface selection, optional DPI/rate/RGB defaults, and opt-in Wallust settings. Explicit CLI values override config; config values only fill omitted values for an explicitly invoked command. Do not store raw profile data in user config. A generic provider, zone mapping coordinator, watcher, and manual override system remain future work.
 
 ## Coordinator/interface
 

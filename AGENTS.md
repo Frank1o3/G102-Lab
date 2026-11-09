@@ -2,7 +2,7 @@
 
 ## Purpose and target
 
-This workspace contains an independent Logitech G102 LIGHTSYNC control application, implemented **native Rust**, **Linux-first**, beginning with a reusable, independently testable device-control library. Phase 1 provides read-only HID++ discovery and inspection; Phase 2 adds 0x2201 DPI and 0x8060 report-rate services/CLI commands. Neither feature has yet been physically validated on the target G102. Treat other Logitech devices as capability-based extensions, not as universally compatible targets.
+This workspace contains an independent Logitech G102 LIGHTSYNC control application, implemented in **native Rust** and **Linux-first**. The CLI provides HID++ discovery/inspection, explicit DPI/rate/RGB operations, read-only onboard inspection, and offline backup tools. DPI, polling, and RGB physical behavior remains unverified for the target; physical 0x8100 profile writes remain disabled. Phase 10 prepares Arch/CachyOS packaging, optional TOML config, a narrow udev rule, and an explicitly invoked Wallust adapter. No daemon, service, GUI, or frontend is in scope. Treat other Logitech devices as capability-based extensions, not as universally compatible targets.
 
 ## Mandatory constraints
 
