@@ -57,11 +57,11 @@ jobs:
           shopt -s nullglob
 
           packages=(
-            "$GITHUB_WORKSPACE"/packaging/arch/g102-control-*.pkg.tar.zst
+            "$GITHUB_WORKSPACE"/packaging/arch/g102-control-[0-9]*.pkg.tar.zst
           )
 
           if (( ${#packages[@]} != 1 )); then
-            echo "Expected exactly one g102-control package."
+           echo "Expected exactly one main g102-control package."
             echo "Found: ${#packages[@]}"
             exit 1
           fi
