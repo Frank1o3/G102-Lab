@@ -1,0 +1,138 @@
+
+name: Publish Pacman Repository
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pacman-repository
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build Arch Package
+    runs-on: ubuntu-latest
+
+    container:
+      image: archlinux:base-devel
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v7
+
+      - name: Install build dependencies
+        run: |
+          pacman -Syu --noconfirm --needed \
+            base-devel \
+            git \
+            rust \
+            cargo \
+            systemd-libs \
+            pkgconf \
+            python \
+            shadow
+
+          command -v repo-add
+
+      - name: Build package as an unprivileged user
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          useradd --create-home --user-group --shell /bin/bash builder
+          chown -R builder:builder "$GITHUB_WORKSPACE"
+
+          runuser -u builder -- bash -c \
+            "cd '$GITHUB_WORKSPACE/packaging/arch' && makepkg --cleanbuild --noconfirm"
+
+      - name: Generate Pacman repository
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p repository/x86_64
+          shopt -s nullglob
+
+          packages=(
+            "$GITHUB_WORKSPACE"/packaging/arch/g102-control-*.pkg.tar.zst
+          )
+
+          if (( ${#packages[@]} != 1 )); then
+            echo "Expected exactly one g102-control package."
+            echo "Found: ${#packages[@]}"
+            exit 1
+          fi
+
+          install -m 0644 "${packages[0]}" repository/x86_64/
+
+          repo-add \
+            repository/x86_64/g102-lab.db.tar.zst \
+            repository/x86_64/g102-control-*.pkg.tar.zst
+
+          # repo-add creates symlink aliases for its databases.
+          # Convert them to regular files for reliable static hosting.
+          while IFS= read -r -d '' link; do
+            target="$(readlink -f "$link")"
+            temporary_file="${link}.tmp"
+
+            cp "$target" "$temporary_file"
+            mv "$temporary_file" "$link"
+          done < <(find repository -type l -print0)
+
+          # Prevent GitHub Pages from processing repository files with Jekyll.
+          touch repository/.nojekyll
+
+          echo "Generated repository:"
+          find repository -maxdepth 3 -type f -print
+
+      - name: Upload repository files
+        uses: actions/upload-artifact@v7
+        with:
+          name: pacman-repository
+          path: repository/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 1
+
+  deploy:
+    name: Publish to GitHub Pages
+    runs-on: ubuntu-latest
+    needs: build
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download repository files
+        uses: actions/download-artifact@v8
+        with:
+          name: pacman-repository
+          path: public
+
+      - name: Verify repository
+        run: |
+          set -euo pipefail
+
+          test -s public/x86_64/g102-lab.db
+          test -s public/x86_64/g102-lab.db.tar.zst
+
+          package="$(find public/x86_64 \
+            -maxdepth 1 \
+            -name 'g102-control-*.pkg.tar.zst' \
+            -print -quit)"
+
+          test -n "$package"
+
+          echo "Repository files are ready:"
+          find public -maxdepth 3 -type f -print
+
+      - name: Publish to gh-pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_branch: gh-pages
+          publish_dir: ./public
+          keep_files: false
