@@ -1363,13 +1363,20 @@ pub struct RestoreExecutionReport {
 }
 
 pub fn generate_unique_backup_path(prefix: &str) -> std::path::PathBuf {
+    generate_unique_backup_path_with_exists(prefix, |candidate| candidate.exists())
+}
+
+fn generate_unique_backup_path_with_exists(
+    prefix: &str,
+    mut exists: impl FnMut(&std::path::Path) -> bool,
+) -> std::path::PathBuf {
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
     let mut candidate = std::path::PathBuf::from(format!("{prefix}_{secs}.obk"));
     let mut counter = 1;
-    while candidate.exists() {
+    while exists(&candidate) {
         candidate = std::path::PathBuf::from(format!("{prefix}_{secs}_{counter}.obk"));
         counter += 1;
     }
@@ -1855,7 +1862,41 @@ fn execute_profile_restore_after_gate<T: HidTransport>(
 mod tests {
     use super::*;
     use crate::protocol::{Packet, ReportKind};
-    use std::{collections::VecDeque, time::Duration};
+    use std::{
+        collections::VecDeque,
+        sync::atomic::{AtomicU64, Ordering},
+        time::Duration,
+    };
+
+    struct TestTempDir(std::path::PathBuf);
+
+    impl TestTempDir {
+        fn new() -> Self {
+            static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+            loop {
+                let path = std::env::temp_dir().join(format!(
+                    "g102-control-onboard-{}-{}",
+                    std::process::id(),
+                    NEXT_ID.fetch_add(1, Ordering::Relaxed)
+                ));
+                match std::fs::create_dir(&path) {
+                    Ok(()) => return Self(path),
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                    Err(error) => panic!("could not create test temporary directory: {error}"),
+                }
+            }
+        }
+
+        fn path(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TestTempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
 
     struct Mock {
         replies: VecDeque<Vec<u8>>,
@@ -3407,16 +3448,19 @@ mod tests {
 
     #[test]
     fn test_unique_backup_path_generation() {
-        let path1 = generate_unique_backup_path("test_prefix");
+        let temp_dir = TestTempDir::new();
+        let path1 = generate_unique_backup_path_with_exists("test_prefix", |candidate| {
+            temp_dir.path().join(candidate).exists()
+        });
         assert!(path1.to_str().unwrap().ends_with(".obk"));
 
-        // Create file so next call detects existence
-        std::fs::write(&path1, b"test").unwrap();
-        let path2 = generate_unique_backup_path("test_prefix");
+        // Create the candidate inside the isolated directory so the next call detects it.
+        std::fs::write(temp_dir.path().join(&path1), b"test").unwrap();
+        let path2 = generate_unique_backup_path_with_exists("test_prefix", |candidate| {
+            temp_dir.path().join(candidate).exists()
+        });
         assert_ne!(path1, path2);
         assert!(path2.to_str().unwrap().ends_with("_1.obk"));
-
-        let _ = std::fs::remove_file(&path1);
     }
 
     // ── Phase 8: Protocol hardening tests ────────────────────────────────────
